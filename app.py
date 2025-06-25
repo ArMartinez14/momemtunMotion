@@ -12,7 +12,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
 
-# === INICIALIZAR FIREBASE desde Secrets ===
+# === INICIALIZAR ###FIREBASE desde Secrets ===
 if not firebase_admin._apps:
     # Lee el secreto como cadena JSON y convierte a dict
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
