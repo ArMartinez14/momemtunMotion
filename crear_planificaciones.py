@@ -67,7 +67,7 @@ def crear_rutinas():
 
             for idx, fila in enumerate(st.session_state[dia_key]):
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2])
+                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2])
                 fila["Circuito"] = cols[0].selectbox(
                     "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
                     index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
@@ -100,18 +100,17 @@ def crear_rutinas():
                 fila["Velocidad"] = cols[7].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[8].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
 
-                for p in range(1, 4):
-                    if progresion_activa == f"Progresión {p}":
-                        fila[f"Variable_{p}"] = cols[9].selectbox(
-                            "", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
-                            index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
-                            key=f"var{p}_{i}_{idx}", label_visibility="collapsed"
-                        )
-                        fila[f"Cantidad_{p}"] = cols[10].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
-                        fila[f"Operacion_{p}"] = cols[11].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
-                            index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
-                            key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
-                        fila[f"Semanas_{p}"] = st.text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", placeholder=f"Sem{p}")
+                if progresion_activa:
+                    fila[f"Variable_{progresion_activa[-1]}"] = st.selectbox(
+                        "Variable a modificar", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
+                        index=0 if not fila.get(f"Variable_{progresion_activa[-1]}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{progresion_activa[-1]}"]),
+                        key=f"var_{i}_{idx}"
+                    )
+                    fila[f"Cantidad_{progresion_activa[-1]}"] = st.text_input("Cantidad", value=fila.get(f"Cantidad_{progresion_activa[-1]}", ""), key=f"cant_{i}_{idx}")
+                    fila[f"Operacion_{progresion_activa[-1]}"] = st.selectbox("Operación", ["", "multiplicacion", "division", "suma", "resta"],
+                        index=0 if not fila.get(f"Operacion_{progresion_activa[-1]}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{progresion_activa[-1]}"]),
+                        key=f"ope_{i}_{idx}")
+                    fila[f"Semanas_{progresion_activa[-1]}"] = st.text_input("Semanas", value=fila.get(f"Semanas_{progresion_activa[-1]}", ""), key=f"sem_{i}_{idx}")
 
     st.markdown("---")
 
