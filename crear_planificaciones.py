@@ -101,16 +101,20 @@ def crear_rutinas():
                 fila["RIR"] = cols[8].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
 
                 if progresion_activa:
-                    fila[f"Variable_{progresion_activa[-1]}"] = st.selectbox(
-                        "Variable a modificar", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
-                        index=0 if not fila.get(f"Variable_{progresion_activa[-1]}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{progresion_activa[-1]}"]),
-                        key=f"var_{i}_{idx}"
+                    p = progresion_activa[-1]
+                    prog_cols = st.columns([3, 2, 3, 3])
+                    fila[f"Variable_{p}"] = prog_cols[0].selectbox(
+                        "", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
+                        index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
+                        key=f"var_{i}_{idx}", label_visibility="collapsed"
                     )
-                    fila[f"Cantidad_{progresion_activa[-1]}"] = st.text_input("Cantidad", value=fila.get(f"Cantidad_{progresion_activa[-1]}", ""), key=f"cant_{i}_{idx}")
-                    fila[f"Operacion_{progresion_activa[-1]}"] = st.selectbox("Operación", ["", "multiplicacion", "division", "suma", "resta"],
-                        index=0 if not fila.get(f"Operacion_{progresion_activa[-1]}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{progresion_activa[-1]}"]),
-                        key=f"ope_{i}_{idx}")
-                    fila[f"Semanas_{progresion_activa[-1]}"] = st.text_input("Semanas", value=fila.get(f"Semanas_{progresion_activa[-1]}", ""), key=f"sem_{i}_{idx}")
+                    fila[f"Cantidad_{p}"] = prog_cols[1].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant_{i}_{idx}", label_visibility="collapsed", placeholder="Cantidad")
+                    fila[f"Operacion_{p}"] = prog_cols[2].selectbox(
+                        "", ["", "multiplicacion", "division", "suma", "resta"],
+                        index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
+                        key=f"ope_{i}_{idx}", label_visibility="collapsed"
+                    )
+                    fila[f"Semanas_{p}"] = prog_cols[3].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem_{i}_{idx}", label_visibility="collapsed", placeholder="Semanas")
 
     st.markdown("---")
 
