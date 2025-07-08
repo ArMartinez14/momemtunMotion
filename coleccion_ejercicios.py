@@ -1,61 +1,46 @@
+import csv
 import firebase_admin
 from firebase_admin import credentials, firestore
+import unicodedata
 
-# === 1️⃣ Inicializar Firebase desde archivo local ===
-cred = credentials.Certificate("firebase.json")  # Asegúrate que este archivo esté en la misma carpeta
+# === 🔤 Función para normalizar texto ===
+def normalizar(texto):
+    if not texto:
+        return ""
+    texto = texto.strip().lower()
+    texto = unicodedata.normalize("NFD", texto)
+    texto = texto.encode("ascii", "ignore").decode("utf-8")
+    return texto
+
+def formatear_id(texto):
+    return normalizar(texto).replace(" ", "_").replace("-", "_").replace("°", "")
+
+# === 🔐 Inicializar Firebase ===
+cred = credentials.Certificate("rutinasmotion-2f8922ec718f.json")
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# === 2️⃣ Ejercicios de prueba ===
-ejercicios = [
-    {
-        "nombre_es": "Sentadilla",
-        "nombre_en": "Squat",
-        "grupo_muscular": "Piernas",
-        "tipo": "Fuerza",
-        "equipo": "Barra",
-        "nivel": "Intermedio"
-    },
-    {
-        "nombre_es": "Peso muerto",
-        "nombre_en": "Deadlift",
-        "grupo_muscular": "Espalda",
-        "tipo": "Fuerza",
-        "equipo": "Barra",
-        "nivel": "Intermedio"
-    },
-    {
-        "nombre_es": "Prensa 45°",
-        "nombre_en": "Leg Press 45",
-        "grupo_muscular": "Piernas",
-        "tipo": "Fuerza",
-        "equipo": "Prensa 45°",
-        "nivel": "Intermedio"
-    }
-]
+# === 📄 Leer CSV ===
+with open("ejercicios.csv", encoding="utf-8-sig") as archivo:
+    lector = csv.DictReader(archivo)
+    ejercicios_raw = list(lector)
 
-for ejercicio in ejercicios:
-    doc_id = ejercicio["nombre_es"].lower().replace(" ", "_").replace("°", "")
-    db.collection("ejercicios").document(doc_id).set(ejercicio)
+# === 🔁 Subir con normalización de ID y campos
+for fila in ejercicios_raw:
+    fila_normalizada = {}
+    
+    for clave_original, valor_original in fila.items():
+        clave = normalizar(clave_original).replace(" ", "_").replace("-", "_")
+        
+        # Mantener valor de "nombre" sin guiones bajos
+        if clave == "nombre":
+            valor = normalizar(valor_original)
+        else:
+            valor = formatear_id(valor_original)
 
-print("✅ Ejercicios cargados correctamente")
+        fila_normalizada[clave] = valor
 
-# === 3️⃣ Implementos de prueba ===
-implementos = [
-    {
-        "nombre": "Barra",
-        "tipo": "Libre",
-        "pesos_disponibles": [20, 25, 30, 35, 40, 45, 50, 55, 60]
-    },
-    {
-        "nombre": "Prensa 45°",
-        "tipo": "Máquina",
-        "pesos_disponibles": [7, 14, 21, 28, 35, 42, 49, 56]
-    }
-]
+    doc_id = formatear_id(fila.get("Nombre", "sin_nombre"))
+    db.collection("ejercicios").document(doc_id).set(fila_normalizada)
 
-for impl in implementos:
-    doc_id = impl["nombre"].lower().replace(" ", "_").replace("°", "")
-    db.collection("implementos").document(doc_id).set(impl)
-
-print("✅ Implementos cargados correctamente")
+print(f"✅ Subidos {len(ejercicios_raw)} ejercicios normalizados con ID limpio y campo 'nombre' legible.")
