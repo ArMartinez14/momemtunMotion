@@ -1,15 +1,12 @@
-import streamlit as st
-from firebase_admin import credentials, firestore
 import firebase_admin
-import json
+from firebase_admin import credentials, firestore
 
-if not firebase_admin._apps:
-    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-    cred = credentials.Certificate(cred_dict)
-    firebase_admin.initialize_app(cred)
-
+# === 1️⃣ Inicializar Firebase desde archivo local ===
+cred = credentials.Certificate("firebase.json")  # Asegúrate que este archivo esté en la misma carpeta
+firebase_admin.initialize_app(cred)
 db = firestore.client()
-# === 2️⃣ Cargar ejercicios ===
+
+# === 2️⃣ Ejercicios de prueba ===
 ejercicios = [
     {
         "nombre_es": "Sentadilla",
@@ -38,12 +35,12 @@ ejercicios = [
 ]
 
 for ejercicio in ejercicios:
-    doc_id = ejercicio["nombre_es"].lower().replace(" ", "_")
+    doc_id = ejercicio["nombre_es"].lower().replace(" ", "_").replace("°", "")
     db.collection("ejercicios").document(doc_id).set(ejercicio)
 
-print("✅ Ejercicios cargados")
+print("✅ Ejercicios cargados correctamente")
 
-# === 3️⃣ Cargar implementos ===
+# === 3️⃣ Implementos de prueba ===
 implementos = [
     {
         "nombre": "Barra",
@@ -61,4 +58,4 @@ for impl in implementos:
     doc_id = impl["nombre"].lower().replace(" ", "_").replace("°", "")
     db.collection("implementos").document(doc_id).set(impl)
 
-print("✅ Implementos cargados")
+print("✅ Implementos cargados correctamente")
