@@ -67,7 +67,7 @@ def crear_rutinas():
 
             for idx, fila in enumerate(st.session_state[dia_key]):
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2])
                 fila["Circuito"] = cols[0].selectbox(
                     "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
                     index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
@@ -111,7 +111,7 @@ def crear_rutinas():
                         fila[f"Operacion_{p}"] = cols[11].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
                             index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
                             key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
-                        fila[f"Semanas_{p}"] = cols[12].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
+                        fila[f"Semanas_{p}"] = st.text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", placeholder=f"Sem{p}")
 
     st.markdown("---")
 
