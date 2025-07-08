@@ -33,6 +33,12 @@ def crear_rutinas():
     semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
     entrenador = st.text_input("Nombre del entrenador responsable:")
 
+    # === Cargar ejercicios desde Firestore ===
+    ejercicios_docs = db.collection("ejercicios").stream()
+    lista_ejercicios = sorted([doc.to_dict().get("nombre", "") for doc in ejercicios_docs if doc.exists])
+    implementos_docs = db.collection("implementos").stream()
+    mapa_pesos = {doc.id.lower(): doc.to_dict().get("pesos", []) for doc in implementos_docs}
+
     st.markdown("---")
     st.subheader("Días de entrenamiento")
 
@@ -49,23 +55,6 @@ def crear_rutinas():
         horizontal=True, index=0
     )
 
-    # === Cargar ejercicios y pesos ===
-    ejercicios_ref = db.collection("ejercicios").stream()
-    lista_ejercicios = []
-    mapa_datos_ejercicio = {}
-    for doc in ejercicios_ref:
-        data = doc.to_dict()
-        nombre_legible = data.get("nombre", "")
-        lista_ejercicios.append(nombre_legible)
-        mapa_datos_ejercicio[nombre_legible] = data
-
-    implementos_ref = db.collection("implementos").stream()
-    mapa_pesos_por_equipo = {}
-    for doc in implementos_ref:
-        data = doc.to_dict()
-        nombre_equipo = data.get("nombre", "").lower().replace(" ", "_").replace("\u00b0", "")
-        mapa_pesos_por_equipo[nombre_equipo] = data.get("pesos_disponibles", [])
-
     for i, tab in enumerate(tabs):
         with tab:
             dia_key = f"rutina_dia_{i + 1}"
@@ -79,29 +68,33 @@ def crear_rutinas():
             for idx, fila in enumerate(st.session_state[dia_key]):
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
                 cols = st.columns(15)
-                fila["Circuito"] = cols[0].selectbox("", list("ABCDEFGHIJ"),
-                    index=list("ABCDEFGHIJ").index(fila["Circuito"]) if fila["Circuito"] else 0,
-                    key=f"circ_{i}_{idx}", label_visibility="collapsed")
+                fila["Circuito"] = cols[0].selectbox(
+                    "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
+                    index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
+                    key=f"circ_{i}_{idx}", label_visibility="collapsed"
+                )
                 fila["Sección"] = "Warm Up" if fila["Circuito"] in ["A", "B", "C"] else "Work Out"
                 cols[1].text(fila["Sección"])
 
-                # Ejercicio con autocompletado
-                input_ej = cols[2].text_input("", value=fila["Ejercicio"], key=f"ej_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
-                coincidencias = [e for e in lista_ejercicios if input_ej.lower() in e.lower()] if input_ej else lista_ejercicios
-                ejercicio_final = coincidencias[0] if coincidencias else input_ej
-                fila["Ejercicio"] = ejercicio_final
+                # === Buscador y selector de ejercicio ===
+                busqueda = cols[2].text_input(
+                    "", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio"
+                )
+                coincidencias = [e for e in lista_ejercicios if busqueda.lower() in e.lower()] if busqueda else lista_ejercicios
+                seleccion = cols[2].selectbox(
+                    "", coincidencias, key=f"selector_{i}_{idx}", label_visibility="collapsed"
+                )
+                fila["Ejercicio"] = seleccion
+
+                # Detectar implemento y cargar pesos
+                doc_ejercicio = db.collection("ejercicios").where("nombre", "==", seleccion).limit(1).stream()
+                implemento = next((doc.to_dict().get("equipo", "") for doc in doc_ejercicio), "")
+                pesos = mapa_pesos.get(implemento.lower(), [])
 
                 fila["Series"] = cols[3].text_input("", value=fila["Series"], key=f"ser_{i}_{idx}", label_visibility="collapsed", placeholder="Series")
                 fila["Repeticiones"] = cols[4].text_input("", value=fila["Repeticiones"], key=f"rep_{i}_{idx}", label_visibility="collapsed", placeholder="Reps")
-
-                datos = mapa_datos_ejercicio.get(ejercicio_final, {})
-                equipo = datos.get("implemento", "")
-                equipo_id = equipo.lower().replace(" ", "_").replace("\u00b0", "")
-                pesos_disponibles = mapa_pesos_por_equipo.get(equipo_id, [])
-
-                if pesos_disponibles:
-                    valor_actual = int(fila["Peso"]) if fila["Peso"].isdigit() and int(fila["Peso"]) in pesos_disponibles else pesos_disponibles[0]
-                    fila["Peso"] = cols[5].selectbox("", options=pesos_disponibles, index=pesos_disponibles.index(valor_actual), key=f"peso_{i}_{idx}", label_visibility="collapsed")
+                if pesos:
+                    fila["Peso"] = cols[5].selectbox("", pesos, key=f"peso_{i}_{idx}", label_visibility="collapsed")
                 else:
                     fila["Peso"] = cols[5].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
 
@@ -113,9 +106,11 @@ def crear_rutinas():
 
                 for p in range(1, 4):
                     if progresion_activa == f"Progresión {p}":
-                        fila[f"Variable_{p}"] = cols[11].selectbox("", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
+                        fila[f"Variable_{p}"] = cols[11].selectbox(
+                            "", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
                             index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
-                            key=f"var{p}_{i}_{idx}", label_visibility="collapsed")
+                            key=f"var{p}_{i}_{idx}", label_visibility="collapsed"
+                        )
                         fila[f"Cantidad_{p}"] = cols[12].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
                         fila[f"Operacion_{p}"] = cols[13].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
                             index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
@@ -133,14 +128,12 @@ def crear_rutinas():
                     ejercicios = st.session_state.get(dia_key, [])
                     if not ejercicios:
                         continue
-
                     st.write(f"**{dia_nombre}**")
                     tabla = []
                     for ejercicio in ejercicios:
                         ejercicio_mod = ejercicio.copy()
                         circuito = ejercicio.get("Circuito", "")
                         ejercicio_mod["Sección"] = "Warm Up" if circuito in ["A", "B", "C"] else "Work Out"
-
                         for p in range(1, 4):
                             variable = ejercicio.get(f"Variable_{p}", "").strip().lower()
                             cantidad = ejercicio.get(f"Cantidad_{p}", "")
