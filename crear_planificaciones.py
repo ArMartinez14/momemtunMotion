@@ -59,71 +59,63 @@ def crear_rutinas():
         with tab:
             dia_key = f"rutina_dia_{i + 1}"
             if dia_key not in st.session_state:
-                st.session_state[dia_key] = [{k: "" for k in columnas_tabla} for _ in range(12)]
+                rutina_vacia = []
+                for j in range(12):
+                    fila = {k: "" for k in columnas_tabla}
+                    fila["Circuito"] = ["A", "A", "A", "B", "B", "B", "D", "D", "E", "E", "F", "F"][j]
+                    fila["Sección"] = "Warm Up" if j < 6 else "Work Out"
+                    rutina_vacia.append(fila)
+                st.session_state[dia_key] = rutina_vacia
 
             st.write(f"Ejercicios para {dias[i]}")
-            if st.button(f"Agregar fila en {dias[i]}", key=f"add_row_{i}"):
-                st.session_state[dia_key].append({k: "" for k in columnas_tabla})
 
             st.markdown("#### Warm Up")
             for idx in range(0, 6):
-                if idx >= len(st.session_state[dia_key]):
-                    continue
                 fila = st.session_state[dia_key][idx]
-                fila["Circuito"] = ["A", "B", "C"][(idx % 3)]
                 fila["Sección"] = "Warm Up"
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
                 cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
-                cols[0].text(fila["Circuito"])
-
+                fila["Circuito"] = cols[0].selectbox("", ["A", "B", "C"], index=["A", "A", "A", "B", "B", "B"].index(fila["Circuito"]) if fila["Circuito"] in ["A", "B", "C"] else 0, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
                 busqueda = cols[1].text_input("", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
                 coincidencias = [e for e in lista_ejercicios if busqueda.lower() in e.lower()] if busqueda else lista_ejercicios
                 seleccion = cols[1].selectbox("", coincidencias, key=f"selector_{i}_{idx}", label_visibility="collapsed")
                 fila["Ejercicio"] = seleccion
-
                 doc_ejercicio = db.collection("ejercicios").where("nombre", "==", seleccion).limit(1).stream()
                 implemento = next((doc.to_dict().get("equipo", "") for doc in doc_ejercicio), "")
                 pesos = mapa_pesos.get(implemento.lower(), [])
-
                 fila["Series"] = cols[2].text_input("", value=fila["Series"], key=f"ser_{i}_{idx}", label_visibility="collapsed", placeholder="Series")
                 fila["Repeticiones"] = cols[3].text_input("", value=fila["Repeticiones"], key=f"rep_{i}_{idx}", label_visibility="collapsed", placeholder="Reps")
-                if pesos:
-                    fila["Peso"] = cols[4].selectbox("", pesos, key=f"peso_{i}_{idx}", label_visibility="collapsed")
-                else:
-                    fila["Peso"] = cols[4].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
+                fila["Peso"] = cols[4].selectbox("", pesos, key=f"peso_{i}_{idx}", label_visibility="collapsed") if pesos else cols[4].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
                 fila["Tiempo"] = cols[5].text_input("", value=fila["Tiempo"], key=f"tiempo_{i}_{idx}", label_visibility="collapsed", placeholder="Seg")
                 fila["Velocidad"] = cols[6].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[7].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
 
+            if st.button(f"Agregar fila en Warm Up - {dias[i]}", key=f"add_row_wu_{i}"):
+                st.session_state[dia_key].insert(6, {k: "" for k in columnas_tabla})
+
             st.markdown("#### Work Out")
-            for idx in range(6, 12):
-                if idx >= len(st.session_state[dia_key]):
-                    continue
+            for idx in range(6, len(st.session_state[dia_key])):
                 fila = st.session_state[dia_key][idx]
-                fila["Circuito"] = ["D", "E", "F", "G", "H", "I"][(idx - 6)]
                 fila["Sección"] = "Work Out"
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
                 cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
-                cols[0].text(fila["Circuito"])
-
+                fila["Circuito"] = cols[0].selectbox("", ["D", "E", "F", "G", "H", "I"], index=["D", "D", "E", "E", "F", "F"].index(fila["Circuito"]) if fila["Circuito"] in ["D", "E", "F", "G", "H", "I"] else 0, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
                 busqueda = cols[1].text_input("", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
                 coincidencias = [e for e in lista_ejercicios if busqueda.lower() in e.lower()] if busqueda else lista_ejercicios
                 seleccion = cols[1].selectbox("", coincidencias, key=f"selector_{i}_{idx}", label_visibility="collapsed")
                 fila["Ejercicio"] = seleccion
-
                 doc_ejercicio = db.collection("ejercicios").where("nombre", "==", seleccion).limit(1).stream()
                 implemento = next((doc.to_dict().get("equipo", "") for doc in doc_ejercicio), "")
                 pesos = mapa_pesos.get(implemento.lower(), [])
-
                 fila["Series"] = cols[2].text_input("", value=fila["Series"], key=f"ser_{i}_{idx}", label_visibility="collapsed", placeholder="Series")
                 fila["Repeticiones"] = cols[3].text_input("", value=fila["Repeticiones"], key=f"rep_{i}_{idx}", label_visibility="collapsed", placeholder="Reps")
-                if pesos:
-                    fila["Peso"] = cols[4].selectbox("", pesos, key=f"peso_{i}_{idx}", label_visibility="collapsed")
-                else:
-                    fila["Peso"] = cols[4].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
+                fila["Peso"] = cols[4].selectbox("", pesos, key=f"peso_{i}_{idx}", label_visibility="collapsed") if pesos else cols[4].text_input("", value=fila["Peso"], key=f"peso_{i}_{idx}", label_visibility="collapsed", placeholder="Kg")
                 fila["Tiempo"] = cols[5].text_input("", value=fila["Tiempo"], key=f"tiempo_{i}_{idx}", label_visibility="collapsed", placeholder="Seg")
                 fila["Velocidad"] = cols[6].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[7].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
+
+            if st.button(f"Agregar fila en Work Out - {dias[i]}", key=f"add_row_wo_{i}"):
+                st.session_state[dia_key].append({k: "" for k in columnas_tabla})
 
     st.markdown("---")
 
