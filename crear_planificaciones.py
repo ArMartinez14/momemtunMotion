@@ -76,7 +76,7 @@ def crear_rutinas():
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
                 cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
                 try:
-                    idx_circuito = ["A", "A", "A", "B", "B", "B"].index(fila["Circuito"])
+                    idx_circuito = ["A", "B", "C"].index(fila["Circuito"])
                 except ValueError:
                     idx_circuito = 0
                 fila["Circuito"] = cols[0].selectbox("", ["A", "B", "C"], index=idx_circuito, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
@@ -104,7 +104,7 @@ def crear_rutinas():
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
                 cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
                 try:
-                    idx_circuito = ["D", "D", "E", "E", "F", "F"].index(fila["Circuito"])
+                    idx_circuito = ["D", "E", "F", "G", "H", "I"].index(fila["Circuito"])
                 except ValueError:
                     idx_circuito = 0
                 fila["Circuito"] = cols[0].selectbox("", ["D", "E", "F", "G", "H", "I"], index=idx_circuito, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
