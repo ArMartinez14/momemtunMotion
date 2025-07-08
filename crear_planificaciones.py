@@ -47,7 +47,7 @@ def crear_rutinas():
 
     columnas_tabla = [
         "Circuito", "Sección", "Ejercicio", "Series", "Repeticiones",
-        "Peso", "Tiempo", "Velocidad", "RIR", "Tipo", "Video"
+        "Peso", "Tiempo", "Velocidad", "RIR"
     ]
 
     progresion_activa = st.radio(
@@ -67,7 +67,7 @@ def crear_rutinas():
 
             for idx, fila in enumerate(st.session_state[dia_key]):
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2])
+                cols = st.columns([1, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2])
                 fila["Circuito"] = cols[0].selectbox(
                     "", ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"],
                     index=["A", "B", "C", "D", "E", "F", "G", "H", "I", "J"].index(fila["Circuito"]) if fila["Circuito"] else 0,
@@ -76,7 +76,6 @@ def crear_rutinas():
                 fila["Sección"] = "Warm Up" if fila["Circuito"] in ["A", "B", "C"] else "Work Out"
                 cols[1].text(fila["Sección"])
 
-                # === Buscador y selector de ejercicio ===
                 busqueda = cols[2].text_input(
                     "", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio"
                 )
@@ -86,7 +85,6 @@ def crear_rutinas():
                 )
                 fila["Ejercicio"] = seleccion
 
-                # Detectar implemento y cargar pesos
                 doc_ejercicio = db.collection("ejercicios").where("nombre", "==", seleccion).limit(1).stream()
                 implemento = next((doc.to_dict().get("equipo", "") for doc in doc_ejercicio), "")
                 pesos = mapa_pesos.get(implemento.lower(), [])
@@ -101,21 +99,19 @@ def crear_rutinas():
                 fila["Tiempo"] = cols[6].text_input("", value=fila["Tiempo"], key=f"tiempo_{i}_{idx}", label_visibility="collapsed", placeholder="Seg")
                 fila["Velocidad"] = cols[7].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[8].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
-                fila["Tipo"] = cols[9].text_input("", value=fila["Tipo"], key=f"tipo_{i}_{idx}", label_visibility="collapsed", placeholder="Tipo")
-                fila["Video"] = cols[10].text_input("", value=fila["Video"], key=f"video_{i}_{idx}", label_visibility="collapsed", placeholder="Link Video")
 
                 for p in range(1, 4):
                     if progresion_activa == f"Progresión {p}":
-                        fila[f"Variable_{p}"] = cols[11].selectbox(
+                        fila[f"Variable_{p}"] = cols[9].selectbox(
                             "", ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"],
                             index=0 if not fila.get(f"Variable_{p}") else ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"].index(fila[f"Variable_{p}"]),
                             key=f"var{p}_{i}_{idx}", label_visibility="collapsed"
                         )
-                        fila[f"Cantidad_{p}"] = cols[12].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
-                        fila[f"Operacion_{p}"] = cols[13].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
+                        fila[f"Cantidad_{p}"] = cols[10].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
+                        fila[f"Operacion_{p}"] = cols[11].selectbox("", ["", "multiplicacion", "division", "suma", "resta"],
                             index=0 if not fila.get(f"Operacion_{p}") else ["", "multiplicacion", "division", "suma", "resta"].index(fila[f"Operacion_{p}"]),
                             key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
-                        fila[f"Semanas_{p}"] = cols[14].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
+                        fila[f"Semanas_{p}"] = cols[12].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
 
     st.markdown("---")
 
@@ -161,8 +157,7 @@ def crear_rutinas():
                             "peso": ejercicio_mod["Peso"],
                             "tiempo": ejercicio_mod["Tiempo"],
                             "velocidad": ejercicio_mod["Velocidad"],
-                            "rir": ejercicio_mod["RIR"],
-                            "tipo": ejercicio_mod["Tipo"]
+                            "rir": ejercicio_mod["RIR"]
                         })
                     st.dataframe(tabla, use_container_width=True)
 
