@@ -50,10 +50,8 @@ def crear_rutinas():
         "Peso", "Tiempo", "Velocidad", "RIR"
     ]
 
-    progresion_activa = st.radio(
-        "Progresión activa", ["Progresión 1", "Progresión 2", "Progresión 3"],
-        horizontal=True, index=0
-    )
+    variables_progresion = ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"]
+    operaciones = ["", "multiplicacion", "division", "suma", "resta"]
 
     for i, tab in enumerate(tabs):
         with tab:
@@ -64,6 +62,11 @@ def crear_rutinas():
                     fila = {k: "" for k in columnas_tabla}
                     fila["Circuito"] = ["A", "A", "A", "B", "B", "B", "D", "D", "E", "E", "F", "F"][j]
                     fila["Sección"] = "Warm Up" if j < 6 else "Work Out"
+                    for p in range(1, 4):
+                        fila[f"Variable_{p}"] = ""
+                        fila[f"Cantidad_{p}"] = ""
+                        fila[f"Operacion_{p}"] = ""
+                        fila[f"Semanas_{p}"] = ""
                     rutina_vacia.append(fila)
                 st.session_state[dia_key] = rutina_vacia
 
@@ -74,12 +77,9 @@ def crear_rutinas():
                 fila = st.session_state[dia_key][idx]
                 fila["Sección"] = "Warm Up"
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
-                try:
-                    idx_circuito = ["A", "B", "C"].index(fila["Circuito"])
-                except ValueError:
-                    idx_circuito = 0
-                fila["Circuito"] = cols[0].selectbox("", ["A", "B", "C"], index=idx_circuito, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
+                cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2] + [2]*4*3)
+
+                fila["Circuito"] = cols[0].selectbox("", ["A", "B", "C"], index=["A", "B", "C"].index(fila["Circuito"]) if fila["Circuito"] in ["A", "B", "C"] else 0, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
                 busqueda = cols[1].text_input("", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
                 coincidencias = [e for e in lista_ejercicios if busqueda.lower() in e.lower()] if busqueda else lista_ejercicios
                 seleccion = cols[1].selectbox("", coincidencias, key=f"selector_{i}_{idx}", label_visibility="collapsed")
@@ -94,20 +94,20 @@ def crear_rutinas():
                 fila["Velocidad"] = cols[6].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[7].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
 
-            if st.button(f"Agregar fila en Warm Up - {dias[i]}", key=f"add_row_wu_{i}"):
-                st.session_state[dia_key].insert(6, {k: "" for k in columnas_tabla})
+                for p in range(1, 4):
+                    fila[f"Variable_{p}"] = cols[7 + p*4 + 0].selectbox("", variables_progresion, index=variables_progresion.index(fila.get(f"Variable_{p}", "")), key=f"var{p}_{i}_{idx}", label_visibility="collapsed")
+                    fila[f"Cantidad_{p}"] = cols[7 + p*4 + 1].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
+                    fila[f"Operacion_{p}"] = cols[7 + p*4 + 2].selectbox("", operaciones, index=operaciones.index(fila.get(f"Operacion_{p}", "")), key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
+                    fila[f"Semanas_{p}"] = cols[7 + p*4 + 3].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
 
             st.markdown("#### Work Out")
             for idx in range(6, len(st.session_state[dia_key])):
                 fila = st.session_state[dia_key][idx]
                 fila["Sección"] = "Work Out"
                 st.markdown(f"##### Ejercicio {idx + 1} - {fila.get('Ejercicio', '')}")
-                cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2])
-                try:
-                    idx_circuito = ["D", "E", "F", "G", "H", "I"].index(fila["Circuito"])
-                except ValueError:
-                    idx_circuito = 0
-                fila["Circuito"] = cols[0].selectbox("", ["D", "E", "F", "G", "H", "I"], index=idx_circuito, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
+                cols = st.columns([1, 4, 2, 2, 2, 2, 2, 2] + [2]*4*3)
+
+                fila["Circuito"] = cols[0].selectbox("", ["D", "E", "F", "G", "H", "I"], index=["D", "E", "F", "G", "H", "I"].index(fila["Circuito"]) if fila["Circuito"] in ["D", "E", "F", "G", "H", "I"] else 0, key=f"circuito_{i}_{idx}", label_visibility="collapsed")
                 busqueda = cols[1].text_input("", value=fila["Ejercicio"], key=f"busqueda_{i}_{idx}", label_visibility="collapsed", placeholder="Ejercicio")
                 coincidencias = [e for e in lista_ejercicios if busqueda.lower() in e.lower()] if busqueda else lista_ejercicios
                 seleccion = cols[1].selectbox("", coincidencias, key=f"selector_{i}_{idx}", label_visibility="collapsed")
@@ -122,5 +122,8 @@ def crear_rutinas():
                 fila["Velocidad"] = cols[6].text_input("", value=fila["Velocidad"], key=f"vel_{i}_{idx}", label_visibility="collapsed", placeholder="Vel")
                 fila["RIR"] = cols[7].text_input("", value=fila["RIR"], key=f"rir_{i}_{idx}", label_visibility="collapsed", placeholder="RIR")
 
-            if st.button(f"Agregar fila en Work Out - {dias[i]}", key=f"add_row_wo_{i}"):
-                st.session_state[dia_key].append({k: "" for k in columnas_tabla})
+                for p in range(1, 4):
+                    fila[f"Variable_{p}"] = cols[7 + p*4 + 0].selectbox("", variables_progresion, index=variables_progresion.index(fila.get(f"Variable_{p}", "")), key=f"var{p}_{i}_{idx}", label_visibility="collapsed")
+                    fila[f"Cantidad_{p}"] = cols[7 + p*4 + 1].text_input("", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Cant{p}")
+                    fila[f"Operacion_{p}"] = cols[7 + p*4 + 2].selectbox("", operaciones, index=operaciones.index(fila.get(f"Operacion_{p}", "")), key=f"ope{p}_{i}_{idx}", label_visibility="collapsed")
+                    fila[f"Semanas_{p}"] = cols[7 + p*4 + 3].text_input("", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{i}_{idx}", label_visibility="collapsed", placeholder=f"Sem{p}")
