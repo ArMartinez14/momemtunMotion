@@ -128,12 +128,39 @@ def ver_rutinas():
             )
 
             if st.checkbox(f"Editar ejercicio {idx+1}", key=f"edit_{circuito}_{idx}"):
-                col1, col2 = st.columns([3, 1])
-                with col1:
-                    e["peso_alcanzado"] = st.text_input("", value=e.get("peso_alcanzado", ""), placeholder="Peso", key=f"peso_{ejercicio_id}", label_visibility="collapsed")
-                    e["comentario"] = st.text_input("", value=e.get("comentario", ""), placeholder="Comentario", key=f"coment_{ejercicio_id}", label_visibility="collapsed")
-                with col2:
-                    e["rir"] = st.text_input("", value=e.get("rir", ""), placeholder="RIR", key=f"rir_{ejercicio_id}", label_visibility="collapsed")
+                try:
+                    num_series = int(e.get("series", 0))
+                except:
+                    num_series = 0
+
+                # Inicializar estructura si no existe o está mal formada
+                if "series_data" not in e or not isinstance(e["series_data"], list) or len(e["series_data"]) != num_series:
+                    e["series_data"] = [{"reps": "", "peso": "", "rir": ""} for _ in range(num_series)]
+
+                for s_idx in range(num_series):
+                    st.markdown(f"**Serie {s_idx + 1}**")
+                    s_cols = st.columns(3)
+
+                    e["series_data"][s_idx]["reps"] = s_cols[0].text_input(
+                        "Reps", value=e["series_data"][s_idx].get("reps", ""),
+                        placeholder="Reps", key=f"rep_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                    e["series_data"][s_idx]["peso"] = s_cols[1].text_input(
+                        "Peso", value=e["series_data"][s_idx].get("peso", ""),
+                        placeholder="Kg", key=f"peso_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                    e["series_data"][s_idx]["rir"] = s_cols[2].text_input(
+                        "RIR", value=e["series_data"][s_idx].get("rir", ""),
+                        placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
+                    )
+
+                # Comentario general (una sola vez)
+                e["comentario"] = st.text_input(
+                    "Comentario general", value=e.get("comentario", ""),
+                    placeholder="Comentario", key=f"coment_{ejercicio_id}"
+                )
 
             if e.get("video"):
                 st.video(e["video"])
