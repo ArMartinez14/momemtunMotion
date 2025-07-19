@@ -2,45 +2,73 @@ import csv
 import firebase_admin
 from firebase_admin import credentials, firestore
 import unicodedata
+import json
+import streamlit as st
 
-# === 🔤 Función para normalizar texto ===
-def normalizar(texto):
+# 🔤 Normalizar claves
+def normalizar_campo(texto):
     if not texto:
         return ""
     texto = texto.strip().lower()
     texto = unicodedata.normalize("NFD", texto)
     texto = texto.encode("ascii", "ignore").decode("utf-8")
-    return texto
+    return texto.replace(" ", "_").replace("-", "_")
 
+# 🔤 Crear ID a partir del nombre
 def formatear_id(texto):
-    return normalizar(texto).replace(" ", "_").replace("-", "_").replace("°", "")
+    return normalizar_campo(texto).replace("°", "")
 
-# === 🔐 Inicializar Firebase ===
-cred = credentials.Certificate("rutinasmotion-2f8922ec718f.json")
-firebase_admin.initialize_app(cred)
+# 🔐 Inicializar Firebase (usando Streamlit secrets)
+if not firebase_admin._apps:
+    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred)
+
 db = firestore.client()
 
-# === 📄 Leer CSV ===
-with open("ejercicios.csv", encoding="utf-8-sig") as archivo:
+# 📄 Leer archivo CSV
+with open("MOMENTUM.xlsx - APP-2.csv", encoding="utf-8-sig") as archivo:
     lector = csv.DictReader(archivo)
     ejercicios_raw = list(lector)
 
-# === 🔁 Subir con normalización de ID y campos
+# 🔁 Procesar y subir cada fila
+subidos = 0
+omitidos = 0
 for fila in ejercicios_raw:
-    fila_normalizada = {}
-    
-    for clave_original, valor_original in fila.items():
-        clave = normalizar(clave_original).replace(" ", "_").replace("-", "_")
-        
-        # Mantener valor de "nombre" sin guiones bajos
-        if clave == "nombre":
-            valor = normalizar(valor_original)
-        else:
-            valor = formatear_id(valor_original)
+    implemento = fila.get("Implemento", "").strip()
+    detalle = fila.get("Detalle", "").strip()
 
-        fila_normalizada[clave] = valor
+    # Validar que al menos uno esté presente
+    if not implemento and not detalle:
+        print("❌ Fila omitida: sin implemento ni detalle")
+        omitidos += 1
+        continue
 
-    doc_id = formatear_id(fila.get("Nombre", "sin_nombre"))
-    db.collection("ejercicios").document(doc_id).set(fila_normalizada)
+    # Construir nombre combinando implemento y detalle
+    if implemento:
+        nombre = f"{implemento} {detalle}".strip()
+    else:
+        nombre = detalle
 
-print(f"✅ Subidos {len(ejercicios_raw)} ejercicios normalizados con ID limpio y campo 'nombre' legible.")
+    doc_id = formatear_id(nombre)
+
+    # Verificar si ya existe en Firebase
+    doc_ref = db.collection("ejercicios").document(doc_id)
+    if doc_ref.get().exists:
+        print(f"⚠️ Ya existe: {nombre}")
+        omitidos += 1
+        continue
+
+    # Armar documento final con claves normalizadas y valores originales
+    fila_formateada = {}
+    for clave_original, valor in fila.items():
+        clave_normalizada = normalizar_campo(clave_original)
+        fila_formateada[clave_normalizada] = valor
+
+    fila_formateada["nombre"] = nombre  # agregar campo 'nombre' final
+
+    doc_ref.set(fila_formateada)
+    print(f"✅ Subido: {nombre}")
+    subidos += 1
+
+print(f"\n✅ Total subidos: {subidos} | ⛔️ Omitidos: {omitidos}")

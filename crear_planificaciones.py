@@ -5,6 +5,17 @@ from datetime import datetime
 from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina
 import json
+import pandas as pd
+import matplotlib.pyplot as plt
+
+import unicodedata
+
+def normalizar_texto(texto):
+    texto = texto.lower().strip()
+    texto = unicodedata.normalize("NFD", texto)
+    texto = texto.encode("ascii", "ignore").decode("utf-8")
+    return texto
+
 
 # === INICIALIZAR FIREBASE SOLO UNA VEZ ===
 if not firebase_admin._apps:
@@ -82,7 +93,10 @@ def crear_rutinas():
                         #mostrar_progresion = st.checkbox(" ", key=f"mostrar_prog_{i}_{seccion}_{idx}", label_visibility="collapsed")
  
                     # === Inputs principales ===
-                    cols = st.columns(12)
+                    if seccion == "Work Out":
+                        cols = st.columns([1, 3.5, 5, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
+                    else:
+                        cols = st.columns([1, 9, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
 
                     # ✅ Clave única segura para evitar conflicto
                     key_entrenamiento = f"{i}_{seccion.replace(' ', '_')}_{idx}"
@@ -93,46 +107,98 @@ def crear_rutinas():
                         key=f"circ_{key_entrenamiento}", label_visibility="collapsed"
                     )
 
-                    fila["Ejercicio"] = cols[1].text_input(
-                        "", value=fila["Ejercicio"],
-                        key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Ejercicio"
-                    )
+                    # === Solo aplicar buscador si es Work Out ===
+                    if seccion == "Work Out":
+                        palabra_busqueda = cols[1].text_input(
+                            "Buscar ejercicio", value=fila.get("BuscarEjercicio", ""),
+                            key=f"buscar_{key_entrenamiento}",
+                            label_visibility="collapsed",
+                            placeholder="Palabra clave"
+                        )
+                        fila["BuscarEjercicio"] = palabra_busqueda
 
-                    fila["Series"] = cols[2].text_input(
+                        ejercicios_encontrados = []
+                        try:
+                            if palabra_busqueda.strip():
+                                palabras_clave = palabra_busqueda.lower().strip().split()
+
+                                docs_ejercicio = db.collection("ejercicios").stream()
+                                for doc in docs_ejercicio:
+                                    data = doc.to_dict()
+                                    nombre_ejercicio = data.get("nombre", "").lower().replace("_", " ")
+
+                                    # Solo hace match si TODAS las palabras clave están en el nombre del ejercicio
+                                    if all(palabra in nombre_ejercicio for palabra in palabras_clave):
+                                        ejercicios_encontrados.append(data.get("nombre", ""))
+
+                        except Exception as e:
+                            st.warning(f"Error al buscar ejercicios: {e}")
+
+                        seleccionado = cols[2].selectbox(
+                            "Coincidencias", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
+                            key=f"selectbox_{key_entrenamiento}", label_visibility="collapsed"
+                        )
+
+                        fila["Ejercicio"] = seleccionado if seleccionado != "(sin resultados)" else fila.get("Ejercicio", "")
+                    else:
+                        fila["Ejercicio"] = cols[1].text_input(
+                            "Ejercicio", value=fila["Ejercicio"],
+                            key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Ejercicio"
+                        )
+
+
+
+                    fila["Series"] = cols[3].text_input(
                         "", value=fila["Series"],
                         key=f"ser_{key_entrenamiento}", label_visibility="collapsed", placeholder="Series"
                     )
 
-                    fila["Repeticiones"] = cols[3].text_input(
-                        "", value=fila.get("Repeticiones", ""),
-                        key=f"rep_{key_entrenamiento}", label_visibility="collapsed", placeholder="Reps"
+                    col_reps_min = cols[4].text_input(
+                        "Min", value=str(fila.get("RepsMin", "")),
+                        key=f"repsmin_{key_entrenamiento}", label_visibility="collapsed", placeholder="Mín"
+                    )
+                    col_reps_max = cols[5].text_input(
+                        "Max", value=str(fila.get("RepsMax", "")),
+                        key=f"repsmax_{key_entrenamiento}", label_visibility="collapsed", placeholder="Máx"
                     )
 
-                    fila["Peso"] = cols[4].text_input(
+                    # Guardar ambos como int si son válidos
+                    try:
+                        fila["RepsMin"] = int(col_reps_min)
+                    except:
+                        fila["RepsMin"] = ""
+
+                    try:
+                        fila["RepsMax"] = int(col_reps_max)
+                    except:
+                        fila["RepsMax"] = ""
+
+
+                    fila["Peso"] = cols[6].text_input(
                         "", value=fila["Peso"],
                         key=f"peso_{key_entrenamiento}", label_visibility="collapsed", placeholder="Kg"
                     )
 
-                    fila["RIR"] = cols[5].text_input(
+                    fila["RIR"] = cols[7].text_input(
                         "", value=fila["RIR"],
                         key=f"rir_{key_entrenamiento}", label_visibility="collapsed", placeholder="RIR"
                     )
 
                     variables_extra = ["", "Tiempo", "Velocidad"]
-                    fila["VariableExtra"] = cols[6].selectbox(
+                    fila["VariableExtra"] = cols[8].selectbox(
                         "", options=variables_extra,
                         index=variables_extra.index(fila.get("VariableExtra", "")),
                         key=f"extra_{key_entrenamiento}",
                         label_visibility="collapsed"
                     )
 
-                    fila["Tiempo"] = cols[7].text_input(
+                    fila["Tiempo"] = cols[9].text_input(
                         "", value=fila["Tiempo"],
                         key=f"tiempo_{key_entrenamiento}",
                         label_visibility="collapsed", placeholder="Seg"
                     ) if fila.get("VariableExtra") == "Tiempo" else fila.get("Tiempo", "")
 
-                    fila["Velocidad"] = cols[8].text_input(
+                    fila["Velocidad"] = cols[10].text_input(
                         "", value=fila["Velocidad"],
                         key=f"vel_{key_entrenamiento}",
                         label_visibility="collapsed", placeholder="Vel"
@@ -222,9 +288,68 @@ def crear_rutinas():
 
                             st.success(f"✅ Ejercicio copiado como Ejercicio {idx + 1} a: {', '.join(dias_copia)}")
 
+    # === IMPORTANTE: Selección de categoría
     st.markdown("---")
+    
+    # === Normalizador de texto
+    import unicodedata
+    def normalizar_texto(texto):
+        texto = texto.lower().strip()
+        texto = unicodedata.normalize("NFD", texto).encode("ascii", "ignore").decode("utf-8")
+        return texto
 
+    opcion_categoria = st.sidebar.selectbox("📋 Categoría para análisis:", ["grupo_muscular_principal", "patron_de_movimiento"])
 
+    contador = {}
+    nombres_originales = {}
+
+    dias_keys = [k for k in st.session_state if k.startswith("rutina_dia_") and "_Work_Out" in k]
+
+    for key_dia in dias_keys:
+        ejercicios = st.session_state[key_dia]
+
+        for ejercicio in ejercicios:
+            nombre_ejercicio = ejercicio.get("Ejercicio", "").strip()
+            try:
+                series = int(ejercicio.get("Series", 0))
+            except:
+                series = 0
+
+            if not nombre_ejercicio:
+                continue
+
+            try:
+                query = db.collection("ejercicios").where("nombre", "==", nombre_ejercicio).stream()
+                ejercicio_docs = list(query)
+                if not ejercicio_docs:
+                    categoria_valor = "(no encontrado)"
+                else:
+                    data = ejercicio_docs[0].to_dict()
+                    categoria_valor = data.get(opcion_categoria, "(sin dato)")
+            except Exception as e:
+                st.warning(f"Error al buscar '{nombre_ejercicio}': {e}")
+                categoria_valor = "(error)"
+
+            categoria_norm = normalizar_texto(categoria_valor)
+            if categoria_norm in contador:
+                contador[categoria_norm] += series
+                nombres_originales[categoria_norm].add(categoria_valor)
+            else:
+                contador[categoria_norm] = series
+                nombres_originales[categoria_norm] = {categoria_valor}
+
+    # === Mostrar tabla fija en sidebar
+    with st.sidebar:
+        st.markdown("### 🧮 Series por categoría")
+        if contador:
+            df = pd.DataFrame({
+                "Categoría": [", ".join(sorted(nombres_originales[k])) for k in contador],
+                "Series": [contador[k] for k in contador]
+            }).sort_values("Series", ascending=False)
+
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay datos de series aún.")
     # ✅ NUEVO BOTÓN: Previsualizar rutina
     if st.button("🔍 Previsualizar rutina"):
         st.subheader("📅 Previsualización de todas las semanas con progresiones aplicadas")
