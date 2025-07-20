@@ -5,9 +5,9 @@ st.set_page_config(page_title="Momentum", layout="wide")
 
 from vista_rutinas import ver_rutinas
 from borrar_rutinas import borrar_rutinas
-from ingresar_cliente_view import ingresar_cliente_o_video
+from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
 from crear_planificaciones import crear_rutinas
-
+from editar_rutinas import editar_rutinas
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 import json   # 👈 importante para leer el secreto
@@ -77,10 +77,10 @@ if opcion == "Inicio":
 elif opcion == "Ver Rutinas":
     ver_rutinas()
 elif opcion == "Ingresar Deportista o Video":
-    ingresar_cliente_o_video()
+    ingresar_cliente_o_video_o_ejercicio()
 elif opcion == "Borrar Rutinas":
     borrar_rutinas()
 elif opcion == "Crear Rutinas":
     crear_rutinas()
 elif opcion == "Editar Rutinas":
-    st.write("Aquí iría el módulo de editar rutinas.")
+    editar_rutinas()
