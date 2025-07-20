@@ -92,7 +92,7 @@ def ver_rutinas():
     ejercicios.sort(key=ordenar_circuito)
 
     st.markdown(f"### Ejercicios del día {dia_sel}")
-
+    
     st.markdown("""
         <style>
         .compact-input input { font-size: 12px !important; width: 100px !important; }
@@ -157,21 +157,23 @@ def ver_rutinas():
                 st.error(f"⚠️ Error buscando valores alcanzados previos: {err}")
 
 
-            # === Armar partes
-            reps_min = e.get("RepsMin", "")
-            reps_max = e.get("RepsMax", "")
+            # === Mostrar repeticiones en formato mínimo-máximo ===
+            reps_min = e.get("reps_min", "")
+            reps_max = e.get("reps_max", "")
+            series = e.get("series", "")
 
-            if reps_min and reps_max:
-                rep_str = f"{series}x{reps_min}-{reps_max}"
+            # Asegurarse que todo sea string (por seguridad en join/display)
+            rep_min_str = str(reps_min) if reps_min != "" else ""
+            rep_max_str = str(reps_max) if reps_max != "" else ""
+
+            if rep_min_str and rep_max_str:
+                rep_str = f"{series}x {rep_min_str} a {rep_max_str}"
+            elif rep_min_str:
+                rep_str = f"{series}x{rep_min_str}+"
+            elif rep_max_str:
+                rep_str = f"{series}x≤{rep_max_str}"
             else:
-                rep_str = f"{series}x{reps}"
-
-            if reps_alcanzadas is not None:
-                try:
-                    rep_str += f"({int(reps_alcanzadas)})"
-                except:
-                    pass
-
+                rep_str = f"{series}x"
 
             rir_str = f"RIR {rir}"
             if rir_alcanzado is not None:
@@ -197,9 +199,10 @@ def ver_rutinas():
                 unsafe_allow_html=True
             )
 
-            col1, col2 = st.columns([1, 1.2])
+            col1, col2, col3 = st.columns([1, 1.2, 1.2])
             editar = col1.checkbox(f"Editar ejercicio {idx+1}", key=f"edit_{circuito}_{idx}")
             ver_sesion_ant = col2.checkbox("📂 Sesión anterior", key=f"prev_{circuito}_{idx}")
+            ver_video = col3.checkbox("🎥 Video", key=f"ver_video_{circuito}_{idx}")
 
             match_ant = None  # se usa si copiamos luego
 
@@ -286,8 +289,20 @@ def ver_rutinas():
                     placeholder="Comentario", key=f"coment_{ejercicio_id}"
                 )
 
-            if e.get("video"):
-                st.video(e["video"])
+            if ver_video and e.get("video"):
+                video_link = e["video"].strip()
+
+                # ✅ Transformar Shorts a formato estándar
+                if "youtube.com/shorts/" in video_link:
+                    try:
+                        video_id = video_link.split("shorts/")[1].split("?")[0]
+                        video_link = f"https://www.youtube.com/watch?v={video_id}"
+                    except:
+                        pass
+
+                st.video(video_link)
+
+
 
 
 

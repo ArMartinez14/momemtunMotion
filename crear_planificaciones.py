@@ -25,6 +25,14 @@ if not firebase_admin._apps:
 
 db = firestore.client()
 
+# Solo una vez, al inicio del archivo (después de cargar Firebase)
+@st.cache_data(show_spinner=False)
+def cargar_ejercicios():
+    docs = db.collection("ejercicios").stream()
+    return {doc.to_dict().get("nombre", ""): doc.to_dict() for doc in docs if doc.exists}
+
+ejercicios_dict = cargar_ejercicios()
+
 def crear_rutinas():
     st.title("Crear nueva rutina")
 
@@ -122,22 +130,33 @@ def crear_rutinas():
                             if palabra_busqueda.strip():
                                 palabras_clave = palabra_busqueda.lower().strip().split()
 
-                                docs_ejercicio = db.collection("ejercicios").stream()
-                                for doc in docs_ejercicio:
-                                    data = doc.to_dict()
-                                    nombre_ejercicio = data.get("nombre", "").lower().replace("_", " ")
-
-                                    # Solo hace match si TODAS las palabras clave están en el nombre del ejercicio
-                                    if all(palabra in nombre_ejercicio for palabra in palabras_clave):
-                                        ejercicios_encontrados.append(data.get("nombre", ""))
-
+                                ejercicios_encontrados = [
+                                    nombre
+                                    for nombre in ejercicios_dict.keys()
+                                    if all(palabra in nombre.lower() for palabra in palabras_clave)
+                                ]
+                            else:
+                                ejercicios_encontrados = []
                         except Exception as e:
                             st.warning(f"Error al buscar ejercicios: {e}")
+                            ejercicios_encontrados = []
 
                         seleccionado = cols[2].selectbox(
                             "Coincidencias", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
                             key=f"selectbox_{key_entrenamiento}", label_visibility="collapsed"
                         )
+
+                        if seleccionado != "(sin resultados)":
+                            fila["Ejercicio"] = seleccionado
+
+                            # ✅ Si el ejercicio tiene link de video en Firestore y aún no hay uno manual, lo asignamos automáticamente
+                            if not fila.get("Video"):
+                                video_auto = ejercicios_dict.get(seleccionado, {}).get("video", "").strip()
+                                if video_auto:
+                                    fila["Video"] = video_auto
+                        else:
+                            fila["Ejercicio"] = fila.get("Ejercicio", "")
+
 
                         fila["Ejercicio"] = seleccionado if seleccionado != "(sin resultados)" else fila.get("Ejercicio", "")
                     else:
@@ -309,26 +328,31 @@ def crear_rutinas():
         ejercicios = st.session_state[key_dia]
 
         for ejercicio in ejercicios:
-            nombre_ejercicio = ejercicio.get("Ejercicio", "").strip()
+            nombre_raw = ejercicio.get("Ejercicio", "").strip()
+            nombre_norm = normalizar_texto(nombre_raw)
+
             try:
                 series = int(ejercicio.get("Series", 0))
             except:
                 series = 0
 
-            if not nombre_ejercicio:
+            if not nombre_norm:
                 continue
 
-            try:
-                query = db.collection("ejercicios").where("nombre", "==", nombre_ejercicio).stream()
-                ejercicio_docs = list(query)
-                if not ejercicio_docs:
-                    categoria_valor = "(no encontrado)"
-                else:
-                    data = ejercicio_docs[0].to_dict()
+            # Buscar coincidencia exacta normalizada
+            coincidencias = [
+                data for nombre, data in ejercicios_dict.items()
+                if normalizar_texto(nombre) == nombre_norm
+            ]
+            data = coincidencias[0] if coincidencias else None
+
+            if not data:
+                categoria_valor = "(no encontrado)"
+            else:
+                try:
                     categoria_valor = data.get(opcion_categoria, "(sin dato)")
-            except Exception as e:
-                st.warning(f"Error al buscar '{nombre_ejercicio}': {e}")
-                categoria_valor = "(error)"
+                except:
+                    categoria_valor = "(error)"
 
             categoria_norm = normalizar_texto(categoria_valor)
             if categoria_norm in contador:
@@ -338,18 +362,27 @@ def crear_rutinas():
                 contador[categoria_norm] = series
                 nombres_originales[categoria_norm] = {categoria_valor}
 
+
     # === Mostrar tabla fija en sidebar
     with st.sidebar:
         st.markdown("### 🧮 Series por categoría")
         if contador:
             df = pd.DataFrame({
-                "Categoría": [", ".join(sorted(nombres_originales[k])) for k in contador],
+                "Categoría": [
+                    ", ".join(
+                        sorted(
+                            cat.replace("_", " ").capitalize()
+                            for cat in nombres_originales[k]
+                        )
+                    ) for k in contador
+                ],
                 "Series": [contador[k] for k in contador]
             }).sort_values("Series", ascending=False)
 
             st.dataframe(df, use_container_width=True, hide_index=True)
         else:
             st.info("No hay datos de series aún.")
+
     # ✅ NUEVO BOTÓN: Previsualizar rutina
     if st.button("🔍 Previsualizar rutina"):
         st.subheader("📅 Previsualización de todas las semanas con progresiones aplicadas")
