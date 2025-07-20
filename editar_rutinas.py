@@ -15,9 +15,23 @@ db = firestore.client()
 def editar_rutinas():
     st.title("✏️ Editar Rutina y Aplicar Cambios a Futuras Semanas")
 
-    correo = st.text_input("Correo del cliente:")
-    if not correo:
+    # === Buscar clientes desde la colección ===
+    docs = db.collection("rutinas_semanales").stream()
+    clientes_dict = {}
+    for doc in docs:
+        data = doc.to_dict()
+        nombre = data.get("cliente")
+        correo = data.get("correo")
+        if nombre and correo:
+            clientes_dict[nombre] = correo
+
+    nombres_clientes = sorted(clientes_dict.keys())
+    nombre_sel = st.selectbox("Selecciona el cliente:", nombres_clientes)
+    if not nombre_sel:
         return
+
+    correo = clientes_dict[nombre_sel]
+
 
     # === Obtener semanas disponibles ===
     docs = db.collection("rutinas_semanales") \
@@ -37,8 +51,7 @@ def editar_rutinas():
         return
 
     doc_id_semana = semanas_dict[semana_sel]
-    doc_ref = db.collection("rutinas_semanales").document(doc_id_semana)
-    doc_data = doc_ref.get().to_dict()
+    doc_data = db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict()
     rutina = doc_data.get("rutina", {})
 
     dias_disponibles = sorted(rutina.keys(), key=lambda x: int(x))
@@ -46,68 +59,69 @@ def editar_rutinas():
     if not dia_sel:
         return
 
-    st.markdown(f"### 📝 Editar ejercicios del Día {dia_sel}")
+    # === Obtener todos los bloques únicos en ese día ===
+    ejercicios_dia = rutina.get(dia_sel, {})
+    bloques_disponibles = list(set(ej.get("bloque", "") for ej in ejercicios_dia))
+    bloque_sel = st.selectbox("Selecciona el bloque:", bloques_disponibles)
+    if not bloque_sel:
+        return
 
-    cols = st.columns([3, 1, 2, 2, 1])
-    cols[0].markdown("**Ejercicio**")
-    cols[1].markdown("**Series**")
-    cols[2].markdown("**Repeticiones**")
-    cols[3].markdown("**Peso**")
-    cols[4].markdown("**RIR**")
+    # === Mostrar ejercicios del bloque seleccionado ===
+    st.markdown(f"### 📝 Editar ejercicios del Día {dia_sel} - Bloque {bloque_sel}")
+    ejercicios_editados = []
 
-    st.markdown("**Descripción y Comentario**")
-    ejercicios_editables = []
-    dia_rutina = rutina.get(dia_sel, [])
+    for idx, ej in enumerate(ejercicios_dia):
+        if ej.get("bloque", "") != bloque_sel:
+            continue
 
-    for idx, ejercicio in enumerate(dia_rutina):
-        col1, col2, col3, col4, col5 = st.columns([3, 1, 2, 2, 1])
-        ejercicio_editado = ejercicio.copy()
-        ejercicio_editado["ejercicio"] = col1.text_input("", value=ejercicio.get("ejercicio", ""), key=f"ej_{idx}_nombre")
-        ejercicio_editado["series"] = col2.number_input("", value=int(ejercicio.get("series", 0)), key=f"ej_{idx}_series")
-        reps_input = col3.text_input("", value=str(ejercicio.get("repeticiones", ejercicio.get("reps", ""))), key=f"ej_{idx}_reps")
-        ejercicio_editado["repeticiones"] = int(reps_input) if reps_input else None
-        ejercicio_editado["peso"] = col4.text_input("", value=str(ejercicio.get("peso", "")), key=f"ej_{idx}_peso") or None
-        ejercicio_editado["rir"] = col5.text_input("", value=ejercicio.get("rir", ""), key=f"ej_{idx}_rir") or None
+        st.markdown(f"**Ejercicio {idx + 1}**")
+        ejercicio = ej.copy()
 
-        col6, col7 = st.columns([2, 3])
-        ejercicio_editado["descripcion"] = col6.text_input("Descripción", value=ejercicio.get("descripcion", ""), key=f"ej_{idx}_descripcion")
-        ejercicio_editado["comentario"] = col7.text_input("Comentario", value=ejercicio.get("comentario", ""), key=f"ej_{idx}_comentario")
+        cols = st.columns([4, 1, 2, 2, 1])
+        ejercicio["ejercicio"] = cols[0].text_input("Ejercicio", value=ej.get("ejercicio", ""), key=f"ej_{idx}_nombre")
+        ejercicio["series"] = cols[1].text_input("Series", value=ej.get("series", ""), key=f"ej_{idx}_series")
+        ejercicio["repeticiones"] = cols[2].text_input("Reps (min o máx)", value=ej.get("repeticiones", ""), key=f"ej_{idx}_reps")
+        ejercicio["peso"] = cols[3].text_input("Peso", value=ej.get("peso", ""), key=f"ej_{idx}_peso")
+        ejercicio["rir"] = cols[4].text_input("RIR", value=ej.get("rir", ""), key=f"ej_{idx}_rir")
 
-        ejercicios_editables.append(ejercicio_editado)
+        col_desc, col_com = st.columns([2, 3])
+        ejercicio["descripcion"] = col_desc.text_input("Descripción", value=ej.get("descripcion", ""), key=f"ej_{idx}_descripcion")
+        ejercicio["comentario"] = col_com.text_input("Comentario", value=ej.get("comentario", ""), key=f"ej_{idx}_comentario")
 
-    if st.button("✅ Aplicar cambios a este día y futuras semanas", key=f"btn_guardar_cambios_{dia_sel}"):
+        ejercicio["bloque"] = bloque_sel
+        ejercicios_editados.append((idx, ejercicio))
+        st.markdown("---")
+
+
+    if st.button("✅ Aplicar cambios a este bloque y futuras semanas"):
         try:
             fecha_sel = datetime.strptime(semana_sel, "%Y-%m-%d")
         except ValueError:
-            st.error(f"Formato de fecha inválido: {semana_sel}")
+            st.error("Formato de fecha inválido")
             return
 
-        # Actualizar solo en semanas >= a la actual
-        futuros = db.collection("rutinas_semanales") \
+        docs_futuras = db.collection("rutinas_semanales") \
             .where("correo", "==", correo) \
             .stream()
 
         total_actualizados = 0
 
-        for doc in futuros:
+        for doc in docs_futuras:
             data = doc.to_dict()
             fecha_doc_str = data.get("fecha_lunes", "")
             try:
                 fecha_doc = datetime.strptime(fecha_doc_str, "%Y-%m-%d")
-                if fecha_doc == fecha_sel or fecha_doc > fecha_sel:
-                    rutina_futura = doc.to_dict().get("rutina", {})
+                if fecha_doc >= fecha_sel:
+                    rutina_futura = data.get("rutina", {})
                     if dia_sel in rutina_futura:
-                        rutina_futura[dia_sel] = ejercicios_editables
+                        dia_data = rutina_futura[dia_sel]
+                        for idx, nuevo_ejercicio in ejercicios_editados:
+                            if idx in dia_data and dia_data[idx].get("bloque", "") == bloque_sel:
+                                dia_data[idx] = nuevo_ejercicio
                         db.collection("rutinas_semanales").document(doc.id).update({"rutina": rutina_futura})
                         total_actualizados += 1
             except:
-                pass
+                continue
 
-        st.success(f"✅ Cambiado exitosamente en {total_actualizados} semana(s) (incluyendo la actual si corresponde).")
-        st.info(f"🗓️ Semana modificada: {semana_sel}")
+        st.success(f"✅ Cambios aplicados en {total_actualizados} semana(s).")
 
-        # Recargar documento actualizado para reflejar cambios en pantalla
-        if semana_sel in semanas_dict:
-            doc_data = db.collection("rutinas_semanales").document(semanas_dict[semana_sel]).get().to_dict()
-            rutina = doc_data.get("rutina", {})
-            dia_rutina = rutina.get(dia_sel, [])
