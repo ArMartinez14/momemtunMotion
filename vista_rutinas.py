@@ -157,23 +157,26 @@ def ver_rutinas():
                 st.error(f"⚠️ Error buscando valores alcanzados previos: {err}")
 
 
-            # === Mostrar repeticiones en formato mínimo-máximo ===
-            reps_min = e.get("reps_min", "")
-            reps_max = e.get("reps_max", "")
             series = e.get("series", "")
 
-            # Asegurarse que todo sea string (por seguridad en join/display)
-            rep_min_str = str(reps_min) if reps_min != "" else ""
-            rep_max_str = str(reps_max) if reps_max != "" else ""
+            # Obtener reps mínimas y máximas si existen
+            reps_min = e.get("reps_min") or e.get("RepsMin", "")
+            reps_max = e.get("reps_max") or e.get("RepsMax", "")
 
-            if rep_min_str and rep_max_str:
-                rep_str = f"{series}x {rep_min_str} a {rep_max_str}"
-            elif rep_min_str:
-                rep_str = f"{series}x{rep_min_str}+"
-            elif rep_max_str:
-                rep_str = f"{series}x≤{rep_max_str}"
+            # Si no hay rango, usar el campo antiguo "repeticiones"
+            repeticiones = e.get("repeticiones", "")
+
+            if reps_min != "" and reps_max != "":
+                rep_str = f"{series}x {reps_min} a {reps_max}"
+            elif reps_min != "":
+                rep_str = f"{series}x{reps_min}+"
+            elif reps_max != "":
+                rep_str = f"{series}x≤{reps_max}"
+            elif repeticiones:
+                rep_str = f"{series}x{repeticiones}"
             else:
                 rep_str = f"{series}x"
+
 
             rir_str = f"RIR {rir}"
             if rir_alcanzado is not None:
