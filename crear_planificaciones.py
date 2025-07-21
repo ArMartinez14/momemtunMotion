@@ -79,12 +79,17 @@ def crear_rutinas():
             for seccion in ["Warm Up", "Work Out"]:
                 st.subheader(f"{seccion}" if seccion == "Warm Up" else f"{seccion}")
                 # === Botón para agregar fila en la sección correspondiente
+                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
+
                 if st.button(f"➕ Agregar fila a {seccion} ({dias[i]})", key=f"add_row_{i}_{seccion}"):
                     nueva_fila = {k: "" for k in columnas_tabla}
                     nueva_fila["Sección"] = seccion
+
+                    if key_seccion not in st.session_state:
+                        st.session_state[key_seccion] = []
+
                     st.session_state[key_seccion].append(nueva_fila)
 
-                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
                 if key_seccion not in st.session_state:
                     st.session_state[key_seccion] = [{k: "" for k in columnas_tabla} for _ in range(6)]
                     for f in st.session_state[key_seccion]:
@@ -446,3 +451,4 @@ def crear_rutinas():
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
+
