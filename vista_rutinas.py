@@ -450,12 +450,19 @@ def ver_rutinas():
                     else:
                         st.warning(f"⚠️ Documento `{doc_id_fut}` no existe ➜ Se omite.")
 
-            # ✅ Paso final: guardar nuevamente ejercicios actualizados en la semana actual
-            # ✅ Guardar ejercicios y RPE
-            db.collection("rutinas_semanales").document(doc_id).update({
-                f"rutina.{dia_sel}": ejercicios,
-                f"rutina.{dia_sel}_rpe": rpe_valor
-            })
+            # ✅ Paso final: guardar ejercicios actualizados solo si el documento ya existe
+            doc_ref_final = db.collection("rutinas_semanales").document(doc_id)
+            doc_final = doc_ref_final.get()
+
+            if doc_final.exists:
+                doc_ref_final.update({
+                    f"rutina.{dia_sel}": ejercicios,
+                    f"rutina.{dia_sel}_rpe": rpe_valor
+                })
+                st.success(f"✅ Cambios guardados correctamente en `{doc_id}`.")
+            else:
+                st.warning(f"⚠️ No se encontró el documento `{doc_id}` ➜ No se guardaron los cambios.")
+
 
             st.success(f"✅ TODOS LOS CAMBIOS guardados correctamente en `{doc_id}`.")
 
