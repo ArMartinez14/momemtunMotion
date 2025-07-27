@@ -124,4 +124,3 @@ def editar_rutinas():
                 continue
 
         st.success(f"✅ Cambios aplicados en {total_actualizados} semana(s).")
-
