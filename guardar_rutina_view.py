@@ -3,6 +3,25 @@ from datetime import timedelta
 from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
 
+def aplicar_progresion_rango(valor_min, valor_max, cantidad, operacion):
+    def operar(valor, cantidad, operacion):
+        try:
+            if operacion == "suma":
+                return int(round(float(valor) + float(cantidad)))
+            elif operacion == "resta":
+                return int(round(float(valor) - float(cantidad)))
+            elif operacion == "multiplicacion":
+                return int(round(float(valor) * float(cantidad)))
+            elif operacion == "division":
+                return int(round(float(valor) / float(cantidad)))
+        except:
+            return valor
+        return valor
+
+    nuevo_min = operar(valor_min, cantidad, operacion) if valor_min != "" else ""
+    nuevo_max = operar(valor_max, cantidad, operacion) if valor_max != "" else ""
+    return nuevo_min, nuevo_max
+
 def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
     db = firestore.client()
 
@@ -11,7 +30,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
             fecha_semana = fecha_inicio + timedelta(weeks=semana)
             fecha_str = fecha_semana.strftime("%Y-%m-%d")
             fecha_norm = fecha_semana.strftime("%Y_%m_%d")
-            correo_norm = correo.replace("@", "_").replace(".", "_")
+            correo_norm = correo.strip().lower().replace("@", "_").replace(".", "_")
             nombre_normalizado = normalizar_texto(nombre_sel.title())
 
             rutina_semana = {
@@ -81,13 +100,11 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
 
                                     for s in range(2, semana + 2):
                                         if s in semanas_aplicar:
-                                            if valor_min != "":
-                                                valor_min = aplicar_progresion(valor_min, float(cantidad), operacion)
-                                            if valor_max != "":
-                                                valor_max = aplicar_progresion(valor_max, float(cantidad), operacion)
+                                            valor_min, valor_max = aplicar_progresion_rango(valor_min, valor_max, float(cantidad), operacion)
 
                                 ejercicio_mod[min_key] = valor_min
                                 ejercicio_mod[max_key] = valor_max
+
 
                             else:
                                 valor_original = ejercicio.get(var_real, "")
