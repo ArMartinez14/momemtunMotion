@@ -103,4 +103,3 @@ def ingresar_cliente_o_video_o_ejercicio():
 
     else:
         st.info("👈 Selecciona una opción para comenzar.")
-
