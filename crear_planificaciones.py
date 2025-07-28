@@ -401,20 +401,26 @@ def crear_rutinas():
         for semana_idx in range(1, int(semanas) + 1):
             with st.expander(f"Semana {semana_idx}"):
                 for i, dia_nombre in enumerate(dias):
-                    dia_key = f"rutina_dia_{i + 1}"
-                    ejercicios = st.session_state.get(dia_key, [])
-                    if not ejercicios:
-                        continue
+                    key_warmup = f"rutina_dia_{i+1}_Warm_Up"
+                    key_workout = f"rutina_dia_{i+1}_Work_Out"
 
-                    st.write(f"**{dia_nombre}**")
+                    ejercicios = []
+                    if key_warmup in st.session_state:
+                        ejercicios.extend(st.session_state[key_warmup])
+                    if key_workout in st.session_state:
+                        ejercicios.extend(st.session_state[key_workout])
+
+                    if not ejercicios:
+                        st.markdown(f"**{dia_nombre}**")
+                        st.info("No hay ejercicios válidos para este día.")
+                        continue
 
                     tabla = []
                     for ejercicio in ejercicios:
-                        ejercicio_mod = ejercicio.copy()
+                        if not ejercicio.get("Ejercicio"):
+                            continue
 
-                        # Determinar sección por circuito
-                        circuito = ejercicio.get("Circuito", "")
-                        ejercicio_mod["Sección"] = "Warm Up" if circuito in ["A", "B", "C"] else "Work Out"
+                        ejercicio_mod = ejercicio.copy()
 
                         # Aplicar progresiones
                         for p in range(1, 4):
@@ -440,28 +446,46 @@ def crear_rutinas():
                                         else:
                                             valor_base = ejercicio_mod.get(variable.capitalize(), "")
                                             if valor_base != "":
-                                                valor_base = aplicar_progresion(valor_base, float(cantidad), operacion)
-                                                ejercicio_mod[variable.capitalize()] = valor_base
+                                                try:
+                                                    valor_base = aplicar_progresion(valor_base, float(cantidad), operacion)
+                                                    ejercicio_mod[variable.capitalize()] = valor_base
+                                                except:
+                                                    pass
 
+                        # Construcción de fila
+                        reps_txt = f"{ejercicio_mod.get('RepsMin', '')} - {ejercicio_mod.get('RepsMax', '')}".strip(" -")
+                        if reps_txt == "-":
+                            reps_txt = ""
 
-                        tabla.append({
-                            "bloque": ejercicio_mod["Sección"],
-                            "circuito": ejercicio_mod["Circuito"],
-                            "ejercicio": ejercicio_mod["Ejercicio"],
-                            "series": ejercicio_mod["Series"],
-                            "repeticiones": ejercicio_mod["Repeticiones"],
-                            "peso": ejercicio_mod["Peso"],
-                            "tiempo": ejercicio_mod["Tiempo"],
-                            "velocidad": ejercicio_mod["Velocidad"],
-                            "rir": ejercicio_mod["RIR"],
-                            "tipo": ejercicio_mod["Tipo"]
-                        })
+                        fila = {
+                            "Bloque": ejercicio_mod.get("Sección", ""),
+                            "Circuito": ejercicio_mod.get("Circuito", ""),
+                            "Ejercicio": ejercicio_mod.get("Ejercicio", ""),
+                            "Series": ejercicio_mod.get("Series", ""),
+                            "Repeticiones": reps_txt,
+                            "Peso": ejercicio_mod.get("Peso", ""),
+                            "RIR": ejercicio_mod.get("RIR", "")
+                        }
 
-                    st.dataframe(tabla, use_container_width=True)
+                        # Variables extra
+                        var_extra = ejercicio_mod.get("VariableExtra", "")
+                        if var_extra == "Tiempo":
+                            fila["Tiempo"] = ejercicio_mod.get("Tiempo", "")
+                            fila["Velocidad"] = ""
+                        elif var_extra == "Velocidad":
+                            fila["Velocidad"] = ejercicio_mod.get("Velocidad", "")
+                            fila["Tiempo"] = ""
+                        else:
+                            fila["Tiempo"] = ""
+                            fila["Velocidad"] = ""
+
+                        tabla.append(fila)
+
+                    st.markdown(f"**{dia_nombre}**")
+                    st.dataframe(pd.DataFrame(tabla), use_container_width=True)
 
     if st.button("Guardar Rutina"):
         if nombre_sel and correo and entrenador:
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
-
