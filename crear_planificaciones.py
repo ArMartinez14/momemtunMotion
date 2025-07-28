@@ -47,6 +47,8 @@ def crear_rutinas():
 
     nombres = sorted(set(u.get("nombre", "") for u in usuarios))
 
+    correos_entrenadores = sorted([u["correo"] for u in usuarios if u.get("rol") == "entrenador"])
+
     nombre_input = st.text_input("Escribe el nombre del cliente:")
     coincidencias = [n for n in nombres if nombre_input.lower() in n.lower()]
     nombre_sel = st.selectbox("Selecciona de la lista:", coincidencias) if coincidencias else ""
@@ -56,7 +58,7 @@ def crear_rutinas():
 
     fecha_inicio = st.date_input("Fecha de inicio de rutina:", value=datetime.today())
     semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
-    entrenador = st.text_input("Nombre del entrenador responsable:")
+    entrenador = st.selectbox("Correo del entrenador responsable:", correos_entrenadores)
 
     st.markdown("---")
     st.subheader("Días de entrenamiento")
