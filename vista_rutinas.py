@@ -54,6 +54,10 @@ def ver_rutinas():
     nombre = datos_usuario.get("nombre", "Usuario")
     rol = datos_usuario.get("rol", "desconocido")
     rol = st.session_state.get("rol", rol)
+    cols = st.columns([5, 1])
+    with cols[1]:
+        if st.button("🔄"):
+            st.cache_data.clear()
 
     if st.checkbox("👤 Mostrar información personal", value=True):
         st.success(f"Bienvenido {nombre} ({rol})")
@@ -197,69 +201,101 @@ def ver_rutinas():
 
             info_str = " · ".join(info_partes)
 
-            st.markdown(
-                f"<div class='ejercicio'>{ejercicio} &nbsp; <span style='font-size:16px; font-weight:normal;'>{info_str}</span></div>",
-                unsafe_allow_html=True
+            video_btn_key = f"video_btn_{circuito}_{idx}"
+            mostrar_video_key = f"mostrar_video_{circuito}_{idx}"
+
+            # Mostrar nombre + info en una sola línea
+            nombre_mostrar = ejercicio
+            if e.get("video"):
+                nombre_mostrar += " 🎥"
+
+            boton_presionado = st.button(
+                f"{nombre_mostrar} — {info_str}",
+                key=video_btn_key,
+                help="Haz clic para ver video"
             )
 
-            col1, col2, col3 = st.columns([1, 1.2, 1.2])
-            editar = col1.checkbox(f"Editar ejercicio {idx+1}", key=f"edit_{circuito}_{idx}")
-            ver_sesion_ant = col2.checkbox("📂 Sesión anterior", key=f"prev_{circuito}_{idx}")
-            ver_video = col3.checkbox("🎥 Video", key=f"ver_video_{circuito}_{idx}")
+            if boton_presionado:
+                st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
 
-            match_ant = None  # se usa si copiamos luego
+            # Mostrar video embebido si el usuario hizo clic en el nombre
+            if e.get("video") and st.session_state.get(mostrar_video_key, False):
+                video_link = e["video"].strip()
+                if "youtube.com/shorts/" in video_link:
+                    try:
+                        video_id = video_link.split("shorts/")[1].split("?")[0]
+                        video_link = f"https://www.youtube.com/watch?v={video_id}"
+                    except:
+                        pass
+                st.video(video_link)
 
-            # === Mostrar sesión anterior aunque NO se edite
-            if ver_sesion_ant:
-                try:
-                    idx_semana_actual = semanas.index(semana_sel)
-                    if idx_semana_actual + 1 < len(semanas):
-                        semana_ant = semanas[idx_semana_actual + 1]
-                        #st.info(f"🔍 Buscando en semana anterior: `{semana_ant}`")
+            # === Verificar si hay datos de la sesión anterior antes de mostrar el botón
+            hay_sesion_anterior = False
+            match_ant = None
 
-                        doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_ant), None)
+            try:
+                idx_semana_actual = semanas.index(semana_sel)
+                if idx_semana_actual + 1 < len(semanas):
+                    semana_ant = semanas[idx_semana_actual + 1]
+                    doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_ant), None)
 
-                        if doc_ant:
-                            rutina_ant = doc_ant.get("rutina", {})
-                            ejercicios_ant = rutina_ant.get(str(dia_sel), [])
+                    if doc_ant:
+                        rutina_ant = doc_ant.get("rutina", {})
+                        ejercicios_ant = rutina_ant.get(str(dia_sel), [])
 
-                            nombre_actual = e.get("ejercicio", "").strip().lower()
-                            circuito_actual = e.get("circuito", "").strip().lower()
+                        nombre_actual = e.get("ejercicio", "").strip().lower()
+                        circuito_actual = e.get("circuito", "").strip().lower()
 
-                            match_ant = next(
-                                (
-                                    ex for ex in ejercicios_ant
-                                    if ex.get("ejercicio", "").strip().lower() == nombre_actual and
-                                    ex.get("circuito", "").strip().lower() == circuito_actual
-                                ),
-                                None
+                        match_ant = next(
+                            (
+                                ex for ex in ejercicios_ant
+                                if ex.get("ejercicio", "").strip().lower() == nombre_actual and
+                                ex.get("circuito", "").strip().lower() == circuito_actual
+                            ),
+                            None
+                        )
+
+                        if match_ant:
+                            hay_sesion_anterior = True
+            except Exception as err:
+                st.warning(f"⚠️ Error buscando sesión anterior: {err}")
+
+            # === Mostrar el botón solo si hay sesión anterior
+            if hay_sesion_anterior:
+                ver_sesion_ant = st.checkbox("📂 Sesión anterior", key=f"prev_{ejercicio_id}")
+
+                if ver_sesion_ant:
+                    series_ant = match_ant.get("series_data", [])
+
+                    if match_ant and isinstance(series_ant, list) and len(series_ant) > 0:
+                        st.markdown("📌 <b>Datos de la sesión anterior:</b>", unsafe_allow_html=True)
+                        for s_idx, serie_ant in enumerate(series_ant):
+                            reps = serie_ant.get("reps", "-") or "-"
+                            peso = serie_ant.get("peso", "-") or "-"
+                            rir = serie_ant.get("rir", "-") or "-"
+                            st.markdown(
+                                f"<div style='font-size:16px; padding-left:10px;'>"
+                                f"<b>Serie {s_idx+1}:</b> {reps} reps · {peso} kg · RIR {rir if rir != '' else '-'}</div>",
+                                unsafe_allow_html=True
                             )
-
-                            if match_ant and isinstance(match_ant.get("series_data", []), list):
-                                if ver_sesion_ant:
-                                    st.markdown("📌 <b>Datos de la sesión anterior:</b>", unsafe_allow_html=True)
-                                    for s_idx, serie_ant in enumerate(match_ant["series_data"]):
-                                        reps = serie_ant.get("reps", "-") or "-"
-                                        peso = serie_ant.get("peso", "-") or "-"
-                                        rir = serie_ant.get("rir", "-") or "-"
-                                        st.markdown(
-                                            f"<div style='font-size:16px; padding-left:10px;'>"
-                                            f" <b>Serie {s_idx+1}:</b> {reps}x{peso}kg · RIR {rir}"
-                                            f"</div>",
-                                            unsafe_allow_html=True
-                                        )
-                            
-                            else:
-                                st.warning("⚠️ No se encontró ejercicio coincidente.")
-                        else:
-                            st.warning("⚠️ No se encontró documento de semana anterior.")
                     else:
-                        st.info("ℹ️ Esta es la semana más antigua disponible.")
-                except Exception as err:
-                    st.error(f"❌ Error buscando datos anteriores: {err}")
+                        st.info("ℹ️ No hay datos registrados de la sesión anterior para este ejercicio.")
+        
+        # === Mostrar reporte por circuito ===
+        if f"mostrar_reporte_{circuito}" not in st.session_state:
+            st.session_state[f"mostrar_reporte_{circuito}"] = False
 
-            # === Edición del ejercicio (solo si está activo)
-            if editar:
+        if st.button(f"📝 Reporte {circuito}", key=f"btn_reporte_{circuito}"):
+            st.session_state[f"mostrar_reporte_{circuito}"] = not st.session_state[f"mostrar_reporte_{circuito}"]
+
+        if st.session_state[f"mostrar_reporte_{circuito}"]:
+            st.markdown(f"### 📋 Registro del circuito {circuito}")
+
+            for idx, e in enumerate(lista):
+                ejercicio = e.get("ejercicio", f"Ejercicio {idx+1}")
+                ejercicio_id = f"{circuito}_{ejercicio}_{idx}".lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "")
+                st.markdown(f"#### {ejercicio}")
+
                 try:
                     num_series = int(e.get("series", 0))
                 except:
@@ -292,26 +328,6 @@ def ver_rutinas():
                     placeholder="Comentario", key=f"coment_{ejercicio_id}"
                 )
 
-            if ver_video and e.get("video"):
-                video_link = e["video"].strip()
-
-                # ✅ Transformar Shorts a formato estándar
-                if "youtube.com/shorts/" in video_link:
-                    try:
-                        video_id = video_link.split("shorts/")[1].split("?")[0]
-                        video_link = f"https://www.youtube.com/watch?v={video_id}"
-                    except:
-                        pass
-
-                st.video(video_link)
-
-
-
-
-
-        st.markdown("</div>", unsafe_allow_html=True)
-        st.markdown("<div class='linea-blanca'></div>", unsafe_allow_html=True)
-
     # === RPE DE LA SESIÓN ===
     rpe_key = f"rpe_sesion_{semana_sel}_{dia_sel}"
     valor_rpe_inicial = rutina_doc["rutina"].get(dia_sel + "_rpe", "")
@@ -322,7 +338,8 @@ def ver_rutinas():
     value=float(valor_rpe_inicial) if valor_rpe_inicial != "" else 0.0,
     key=rpe_key
 )
-
+    st.markdown("---")
+    
     # ✅ GUARDAR CAMBIOS
     if st.button("💾 Guardar cambios del día", key=f"guardar_{dia_sel}_{semana_sel}"):
         st.info("🚀 Iniciando guardado paso a paso...")
