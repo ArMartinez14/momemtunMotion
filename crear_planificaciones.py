@@ -39,8 +39,16 @@ def cargar_usuarios():
     docs = db.collection("usuarios").stream()
     return [doc.to_dict() for doc in docs if doc.exists]
 
+
 def crear_rutinas():
     st.title("Crear nueva rutina")
+    cols = st.columns([5, 1])
+    with cols[1]:
+        if st.button("🔄", help="Recargar ejercicios"):
+            st.cache_data.clear()
+
+    ejercicios_dict = cargar_ejercicios()
+
 
 
     usuarios = cargar_usuarios()
@@ -67,9 +75,9 @@ def crear_rutinas():
     tabs = st.tabs(dias)
 
     columnas_tabla = [
-        "Circuito", "Sección", "Ejercicio", "Series", "Repeticiones",
-        "Peso", "Tiempo", "Velocidad", "RIR", "Tipo", "Video"
-    ]
+    "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
+    "Peso", "Tiempo", "Velocidad", "RIR", "Tipo", "Video"
+]
 
     progresion_activa = st.radio(
         "Progresión activa", ["Progresión 1", "Progresión 2", "Progresión 3"],
@@ -117,9 +125,9 @@ def crear_rutinas():
  
                     # === Inputs principales ===
                     if seccion == "Work Out":
-                        cols = st.columns([1, 3.5, 5, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
+                        cols = st.columns([1, 3, 5, 3, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
                     else:
-                        cols = st.columns([1, 9, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
+                        cols = st.columns([1, 9, 3, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.2])
 
                     # ✅ Clave única segura para evitar conflicto
                     key_entrenamiento = f"{i}_{seccion.replace(' ', '_')}_{idx}"
@@ -179,19 +187,21 @@ def crear_rutinas():
                             "Ejercicio", value=fila["Ejercicio"],
                             key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Ejercicio"
                         )
+                    fila["Detalle"] = cols[3].text_input(
+                        "Detalle", value=fila.get("Detalle", ""),
+                        key=f"detalle_{key_entrenamiento}", label_visibility="collapsed", placeholder="Ej: brazos altos, talonera roja..."
+                    )
 
-
-
-                    fila["Series"] = cols[3].text_input(
+                    fila["Series"] = cols[4].text_input(
                         "", value=fila["Series"],
                         key=f"ser_{key_entrenamiento}", label_visibility="collapsed", placeholder="Series"
                     )
 
-                    col_reps_min = cols[4].text_input(
+                    col_reps_min = cols[5].text_input(
                         "Min", value=str(fila.get("RepsMin", "")),
                         key=f"repsmin_{key_entrenamiento}", label_visibility="collapsed", placeholder="Mín"
                     )
-                    col_reps_max = cols[5].text_input(
+                    col_reps_max = cols[6].text_input(
                         "Max", value=str(fila.get("RepsMax", "")),
                         key=f"repsmax_{key_entrenamiento}", label_visibility="collapsed", placeholder="Máx"
                     )
@@ -208,18 +218,18 @@ def crear_rutinas():
                         fila["RepsMax"] = ""
 
 
-                    fila["Peso"] = cols[6].text_input(
+                    fila["Peso"] = cols[7].text_input(
                         "", value=fila["Peso"],
                         key=f"peso_{key_entrenamiento}", label_visibility="collapsed", placeholder="Kg"
                     )
 
-                    fila["RIR"] = cols[7].text_input(
+                    fila["RIR"] = cols[8].text_input(
                         "", value=fila["RIR"],
                         key=f"rir_{key_entrenamiento}", label_visibility="collapsed", placeholder="RIR"
                     )
 
                     variables_extra = ["", "Tiempo", "Velocidad"]
-                    fila["VariableExtra"] = cols[8].selectbox(
+                    fila["VariableExtra"] = cols[9].selectbox(
                         "", options=variables_extra,
                         index=variables_extra.index(fila.get("VariableExtra", "")),
                         key=f"extra_{key_entrenamiento}",
@@ -227,14 +237,14 @@ def crear_rutinas():
                     )
 
                     if fila.get("VariableExtra") == "Tiempo":
-                        fila["Tiempo"] = cols[9].text_input(
+                        fila["Tiempo"] = cols[10].text_input(
                             "", value=fila["Tiempo"],
                             key=f"tiempo_{key_entrenamiento}",
                             label_visibility="collapsed", placeholder="Seg"
                         )
 
                     if fila.get("VariableExtra") == "Velocidad":
-                        fila["Velocidad"] = cols[9].text_input(
+                        fila["Velocidad"] = cols[11].text_input(
                             "", value=fila["Velocidad"],
                             key=f"velocidad_{key_entrenamiento}",
                             label_visibility="collapsed", placeholder="ms"
@@ -403,26 +413,20 @@ def crear_rutinas():
         for semana_idx in range(1, int(semanas) + 1):
             with st.expander(f"Semana {semana_idx}"):
                 for i, dia_nombre in enumerate(dias):
-                    key_warmup = f"rutina_dia_{i+1}_Warm_Up"
-                    key_workout = f"rutina_dia_{i+1}_Work_Out"
-
-                    ejercicios = []
-                    if key_warmup in st.session_state:
-                        ejercicios.extend(st.session_state[key_warmup])
-                    if key_workout in st.session_state:
-                        ejercicios.extend(st.session_state[key_workout])
-
+                    dia_key = f"rutina_dia_{i + 1}"
+                    ejercicios = st.session_state.get(dia_key, [])
                     if not ejercicios:
-                        st.markdown(f"**{dia_nombre}**")
-                        st.info("No hay ejercicios válidos para este día.")
                         continue
+
+                    st.write(f"**{dia_nombre}**")
 
                     tabla = []
                     for ejercicio in ejercicios:
-                        if not ejercicio.get("Ejercicio"):
-                            continue
-
                         ejercicio_mod = ejercicio.copy()
+
+                        # Determinar sección por circuito
+                        circuito = ejercicio.get("Circuito", "")
+                        ejercicio_mod["Sección"] = "Warm Up" if circuito in ["A", "B", "C"] else "Work Out"
 
                         # Aplicar progresiones
                         for p in range(1, 4):
@@ -448,46 +452,28 @@ def crear_rutinas():
                                         else:
                                             valor_base = ejercicio_mod.get(variable.capitalize(), "")
                                             if valor_base != "":
-                                                try:
-                                                    valor_base = aplicar_progresion(valor_base, float(cantidad), operacion)
-                                                    ejercicio_mod[variable.capitalize()] = valor_base
-                                                except:
-                                                    pass
+                                                valor_base = aplicar_progresion(valor_base, float(cantidad), operacion)
+                                                ejercicio_mod[variable.capitalize()] = valor_base
 
-                        # Construcción de fila
-                        reps_txt = f"{ejercicio_mod.get('RepsMin', '')} - {ejercicio_mod.get('RepsMax', '')}".strip(" -")
-                        if reps_txt == "-":
-                            reps_txt = ""
 
-                        fila = {
-                            "Bloque": ejercicio_mod.get("Sección", ""),
-                            "Circuito": ejercicio_mod.get("Circuito", ""),
-                            "Ejercicio": ejercicio_mod.get("Ejercicio", ""),
-                            "Series": ejercicio_mod.get("Series", ""),
-                            "Repeticiones": reps_txt,
-                            "Peso": ejercicio_mod.get("Peso", ""),
-                            "RIR": ejercicio_mod.get("RIR", "")
-                        }
+                        tabla.append({
+                            "bloque": ejercicio_mod["Sección"],
+                            "circuito": ejercicio_mod["Circuito"],
+                            "ejercicio": ejercicio_mod["Ejercicio"],
+                            "series": ejercicio_mod["Series"],
+                            "repeticiones": ejercicio_mod["Repeticiones"],
+                            "peso": ejercicio_mod["Peso"],
+                            "tiempo": ejercicio_mod["Tiempo"],
+                            "velocidad": ejercicio_mod["Velocidad"],
+                            "rir": ejercicio_mod["RIR"],
+                            "tipo": ejercicio_mod["Tipo"]
+                        })
 
-                        # Variables extra
-                        var_extra = ejercicio_mod.get("VariableExtra", "")
-                        if var_extra == "Tiempo":
-                            fila["Tiempo"] = ejercicio_mod.get("Tiempo", "")
-                            fila["Velocidad"] = ""
-                        elif var_extra == "Velocidad":
-                            fila["Velocidad"] = ejercicio_mod.get("Velocidad", "")
-                            fila["Tiempo"] = ""
-                        else:
-                            fila["Tiempo"] = ""
-                            fila["Velocidad"] = ""
-
-                        tabla.append(fila)
-
-                    st.markdown(f"**{dia_nombre}**")
-                    st.dataframe(pd.DataFrame(tabla), use_container_width=True)
+                    st.dataframe(tabla, use_container_width=True)
 
     if st.button("Guardar Rutina"):
         if nombre_sel and correo and entrenador:
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
+
