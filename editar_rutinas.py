@@ -55,6 +55,18 @@ def editar_rutinas():
     rutina = doc_data.get("rutina", {})
 
     dias_disponibles = sorted(rutina.keys(), key=lambda x: int(x))
+    st.markdown("### 📅 Días en la rutina actual:")
+    st.markdown(", ".join([f"**Día {d}**" for d in dias_disponibles]))
+
+
+    # === Agregar nuevo día ===
+    if st.button("➕ Agregar nuevo día a la rutina"):
+        nuevo_dia = str(max([int(d) for d in dias_disponibles]) + 1) if dias_disponibles else "1"
+        rutina[nuevo_dia] = []
+        db.collection("rutinas_semanales").document(doc_id_semana).update({"rutina": rutina})
+        st.success(f"Día {nuevo_dia} agregado exitosamente. Recarga la página para editarlo.")
+        st.stop()  # Detiene la ejecución para evitar errores por cambios en estructura
+
     dia_sel = st.selectbox("Selecciona el día a editar:", dias_disponibles, format_func=lambda x: f"Día {x}")
     if not dia_sel:
         return
