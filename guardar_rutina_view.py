@@ -2,6 +2,7 @@ from firebase_admin import firestore
 from datetime import timedelta
 from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
+import uuid  # ⬅️ Importar para crear identificador de bloque
 
 def aplicar_progresion_rango(valor_min, valor_max, cantidad, operacion):
     def operar(valor, cantidad, operacion):
@@ -25,6 +26,9 @@ def aplicar_progresion_rango(valor_min, valor_max, cantidad, operacion):
 def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
     db = firestore.client()
 
+    # 🆕 Generar identificador único para este bloque de rutina
+    bloque_id = str(uuid.uuid4())
+
     try:
         for semana in range(int(semanas)):
             fecha_semana = fecha_inicio + timedelta(weeks=semana)
@@ -38,6 +42,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                 "correo": correo,
                 "fecha_lunes": fecha_str,
                 "entrenador": entrenador,
+                "bloque_rutina": bloque_id,  # ✅ Identificador de bloque
                 "rutina": {}
             }
 
@@ -66,7 +71,6 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
 
                         for var_interna, var_real in campos_progresion.items():
                             if isinstance(var_real, tuple):
-                                # Repeticiones en formato rango
                                 min_key, max_key = var_real
                                 min_val = ejercicio.get(min_key, "")
                                 max_val = ejercicio.get(max_key, "")
@@ -105,7 +109,6 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                                 ejercicio_mod[min_key] = valor_min
                                 ejercicio_mod[max_key] = valor_max
 
-
                             else:
                                 valor_original = ejercicio.get(var_real, "")
                                 if not valor_original:
@@ -137,6 +140,7 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
                             "bloque": ejercicio_mod.get("Sección", seccion),
                             "circuito": ejercicio_mod.get("Circuito", ""),
                             "ejercicio": ejercicio_mod.get("Ejercicio", ""),
+                            "detalle": ejercicio_mod.get("Detalle", ""),  # ✅ NUEVO CAMPO
                             "series": ejercicio_mod.get("Series", ""),
                             "reps_min": ejercicio_mod.get("RepsMin", ""),
                             "reps_max": ejercicio_mod.get("RepsMax", ""),
@@ -160,3 +164,4 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias):
 
     except Exception as e:
         st.error(f"❌ Error al guardar la rutina: {e}")
+
