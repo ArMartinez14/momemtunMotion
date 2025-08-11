@@ -5,6 +5,13 @@ from datetime import datetime, timedelta
 import json
 from herramientas import actualizar_progresiones_individual
 
+def obtener_lista_ejercicios(data_dia):
+    if isinstance(data_dia, dict):
+        return list(data_dia.values())
+    elif isinstance(data_dia, list):
+        return data_dia
+    else:
+        return []
 
 def ver_rutinas():
     # === INICIALIZAR FIREBASE SOLO UNA VEZ solo una===
@@ -88,11 +95,32 @@ def ver_rutinas():
     if not rutina_doc:
         st.warning("⚠️ No hay rutina para esa semana.")
         st.stop()
+    # === Mostrar bloque de rutina (si existe)
+    bloque_id = rutina_doc.get("bloque_rutina")
 
-    dias_disponibles = sorted(rutina_doc["rutina"].keys(), key=int)
+    if bloque_id:
+        # Buscar todas las semanas con este bloque para este cliente
+        bloques_mismo_cliente = [
+            r for r in rutinas_cliente if r.get("bloque_rutina") == bloque_id
+        ]
+        fechas_bloque = sorted([r["fecha_lunes"] for r in bloques_mismo_cliente])
+        
+        try:
+            semana_actual_idx = fechas_bloque.index(semana_sel) + 1
+            total_semanas_bloque = len(fechas_bloque)
+            st.markdown(f"📦 <b>Bloque de rutina:</b> Semana {semana_actual_idx} de {total_semanas_bloque}", unsafe_allow_html=True)
+        except ValueError:
+            st.info("ℹ️ Semana no encontrada en bloque de rutina.")
+    else:
+        st.warning("⚠️ Esta rutina no tiene un identificador de bloque.")
+
+    dias_disponibles = sorted(
+        [k for k in rutina_doc["rutina"].keys() if k.isdigit()],
+        key=int
+    )
+
     dia_sel = st.selectbox("📅 Día", dias_disponibles, key="dia_sel")
-
-    ejercicios = rutina_doc["rutina"][dia_sel]
+    ejercicios = obtener_lista_ejercicios(rutina_doc["rutina"][dia_sel])
     ejercicios.sort(key=ordenar_circuito)
 
     st.markdown(f"### Ejercicios del día {dia_sel}")
@@ -120,56 +148,20 @@ def ver_rutinas():
         st.markdown("<div class='bloque'>", unsafe_allow_html=True)
 
         for idx, e in enumerate(lista):
-            # === Inicio del bucle de ejercicios
             ejercicio = e.get("ejercicio", f"Ejercicio {idx+1}")
-            series = e.get("series", "")
-            reps = e.get("repeticiones", "")
-            peso = e.get("peso", "")
             ejercicio_id = f"{circuito}_{ejercicio}_{idx}".lower().replace(" ", "_").replace("(", "").replace(")", "").replace("/", "")
-
-            peso_str = f"{peso}kg" if peso else ""
-            tiempo = e.get("tiempo", "")
-            tiempo_str = f"{tiempo} seg" if tiempo else ""
-            rir = e.get("rir", "")
-            rir_str = f"RIR {rir}" if rir else ""
-
-            # === Buscar datos alcanzados de la semana anterior (para mostrarlos esta semana)
-            reps_alcanzadas = None
-            rir_alcanzado = None
-
-            try:
-                idx_actual = semanas.index(semana_sel)
-                if idx_actual + 1 < len(semanas):
-                    semana_anterior = semanas[idx_actual + 1]
-                    doc_ant = next((r for r in rutinas_cliente if r["fecha_lunes"] == semana_anterior), None)
-                    if doc_ant:
-                        ejercicios_prev = doc_ant.get("rutina", {}).get(str(dia_sel), [])
-                        nombre_actual = e.get("ejercicio", "").strip().lower()
-                        circuito_actual = e.get("circuito", "").strip().lower()
-                        match_prev = next(
-                            (
-                                ex for ex in ejercicios_prev
-                                if ex.get("ejercicio", "").strip().lower() == nombre_actual and
-                                ex.get("circuito", "").strip().lower() == circuito_actual
-                            ),
-                            None
-                        )
-                        if match_prev:
-                            reps_alcanzadas = match_prev.get("reps_alcanzadas")
-                            rir_alcanzado = match_prev.get("rir_alcanzado")
-            except Exception as err:
-                st.error(f"⚠️ Error buscando valores alcanzados previos: {err}")
-
-
+            # === Obtener información del ejercicio ===
+            ejercicio = e.get("ejercicio", f"Ejercicio {idx+1}")
+            detalle = e.get("detalle", "").strip()
             series = e.get("series", "")
-
-            # Obtener reps mínimas y máximas si existen
+            peso = e.get("peso", "")
             reps_min = e.get("reps_min") or e.get("RepsMin", "")
             reps_max = e.get("reps_max") or e.get("RepsMax", "")
-
-            # Si no hay rango, usar el campo antiguo "repeticiones"
             repeticiones = e.get("repeticiones", "")
+            rir = e.get("rir", "")
+            tiempo = e.get("tiempo", "")
 
+            # === Construir string de repeticiones
             if reps_min != "" and reps_max != "":
                 rep_str = f"{series}x {reps_min} a {reps_max}"
             elif reps_min != "":
@@ -181,53 +173,48 @@ def ver_rutinas():
             else:
                 rep_str = f"{series}x"
 
-
-            rir_str = f"RIR {rir}"
-            if rir_alcanzado is not None:
-                try:
-                    rir_str += f"({int(rir_alcanzado)})"
-                except:
-                    pass
-
+            peso_str = f"{peso}kg" if peso else ""
+            tiempo_str = f"{tiempo} seg" if tiempo else ""
+            rir_str = f"RIR {rir}" if rir else ""
 
             info_partes = [rep_str]
-            if peso_str:
-                info_partes.append(peso_str)
-            if tiempo_str:
-                info_partes.append(tiempo_str)
-            if rir_str:
-                info_partes.append(rir_str)
-
-
+            if peso_str: info_partes.append(peso_str)
+            if tiempo_str: info_partes.append(tiempo_str)
+            if rir_str: info_partes.append(rir_str)
             info_str = " · ".join(info_partes)
 
+            # === Mostrar nombre + detalle si existe
+            nombre_mostrar = ejercicio
+            if detalle:
+                nombre_mostrar += f" — {detalle}"
+
+            # === Mostrar como botón solo si tiene video
+            video_url = e.get("video", "").strip()
             video_btn_key = f"video_btn_{circuito}_{idx}"
             mostrar_video_key = f"mostrar_video_{circuito}_{idx}"
 
-            # Mostrar nombre + info en una sola línea
-            nombre_mostrar = ejercicio
-            if e.get("video"):
-                nombre_mostrar += " 🎥"
+            if video_url:
+                boton_presionado = st.button(
+                    f"{nombre_mostrar} 🎥 — {info_str}",
+                    key=video_btn_key,
+                    help="Haz clic para ver video"
+                )
 
-            boton_presionado = st.button(
-                f"{nombre_mostrar} — {info_str}",
-                key=video_btn_key,
-                help="Haz clic para ver video"
-            )
+                if boton_presionado:
+                    st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
 
-            if boton_presionado:
-                st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
-
-            # Mostrar video embebido si el usuario hizo clic en el nombre
-            if e.get("video") and st.session_state.get(mostrar_video_key, False):
-                video_link = e["video"].strip()
-                if "youtube.com/shorts/" in video_link:
-                    try:
-                        video_id = video_link.split("shorts/")[1].split("?")[0]
-                        video_link = f"https://www.youtube.com/watch?v={video_id}"
-                    except:
-                        pass
-                st.video(video_link)
+                # Mostrar video si fue activado
+                if st.session_state.get(mostrar_video_key, False):
+                    if "youtube.com/shorts/" in video_url:
+                        try:
+                            video_id = video_url.split("shorts/")[1].split("?")[0]
+                            video_url = f"https://www.youtube.com/watch?v={video_id}"
+                        except:
+                            pass
+                    st.video(video_url)
+            else:
+                # Sin video ➜ solo texto
+                st.markdown(f"**{nombre_mostrar} — {info_str}**")
 
             # === Verificar si hay datos de la sesión anterior antes de mostrar el botón
             hay_sesion_anterior = False
