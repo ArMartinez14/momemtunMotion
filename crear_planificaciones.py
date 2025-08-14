@@ -169,10 +169,14 @@ def crear_rutinas():
                         cols = st.columns(col_sizes)
 
                         # 0) Circuito
+                        opciones_circuito = ["A","B","C","D","E","F","G","H","I","J","K","L"]
+
                         fila["Circuito"] = cols[0].selectbox(
-                            "", ["A","B","C","D","E","F"],
-                            index=(["A","B","C","D","E","F"].index(fila.get("Circuito")) if fila.get("Circuito") in ["A","B","C","D","E","F"] else 0),
-                            key=f"circ_{key_entrenamiento}", label_visibility="collapsed"
+                            "",
+                            opciones_circuito,
+                            index=(opciones_circuito.index(fila.get("Circuito")) if fila.get("Circuito") in opciones_circuito else 0),
+                            key=f"circ_{key_entrenamiento}",
+                            label_visibility="collapsed"
                         )
 
                         # 1) Buscar + 2) Ejercicio
