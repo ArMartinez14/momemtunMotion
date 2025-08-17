@@ -179,6 +179,7 @@ def crear_rutinas():
                             label_visibility="collapsed"
                         )
 
+
                         # 1) Buscar + 2) Ejercicio
                         if seccion == "Work Out":
                             palabra = cols[1].text_input(
@@ -492,4 +493,3 @@ def crear_rutinas():
             guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias_labels)
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
-
