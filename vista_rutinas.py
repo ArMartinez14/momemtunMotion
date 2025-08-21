@@ -7,7 +7,9 @@ from herramientas import actualizar_progresiones_individual
 import random
 from datetime import date
 
-MENSAJES_MOTIVADORES = [
+# ✅ Lista única (normales + anime, sin mencionar series/personajes)
+MENSAJES_MOTIVACIONALES = [
+    # Base normales
     "💪 ¡Éxito en tu entrenamiento de hoy, {nombre}! 🔥",
     "🚀 {nombre}, cada repetición te acerca más a tu objetivo.",
     "🏋️‍♂️ {nombre}, hoy es un gran día para superar tus límites.",
@@ -17,7 +19,36 @@ MENSAJES_MOTIVADORES = [
     "🌟 Nunca te detengas, {nombre}. ¡Hoy vas a brillar en tu entrenamiento!",
     "🏆 {nombre}, recuerda: disciplina > motivación. ¡Tú puedes!",
     "🙌 A disfrutar el proceso, {nombre}. ¡Confía en ti!",
-    "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana."
+    "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana.",
+
+    # Frases de inspiración anime (sin referencias)
+    "💥 {nombre}, el poder viene en respuesta a una necesidad, no a un deseo.",
+    "⚡ {nombre}, supera tus límites ahora mismo.",
+    "🔥 {nombre}, no rendirse es tu especialidad.",
+    "🍃 {nombre}, jamás te rindas.",
+    "🔥 {nombre}, el trabajo duro es inútil para quien no cree en sí mismo.",
+    "🌀 {nombre}, los fracasos enseñan cosas que el éxito no.",
+    "☠️ {nombre}, no importa cuán difícil se ponga, nunca retrocedas.",
+    "🌊 {nombre}, los sueños nunca terminan.",
+    "🔥 {nombre}, los sueños de los hombres nunca mueren.",
+    "💥 {nombre}, un héroe sonríe incluso cuando tiene el corazón hecho pedazos.",
+    "🌟 {nombre}, más allá de los límites, Plus Ultra.",
+    "⚡ {nombre}, conviértete en el héroe que quieres ser.",
+    "🛡️ {nombre}, si ganas, vives. Si pierdes, mueres. Si no luchas, no puedes ganar.",
+    "⚔️ {nombre}, el mundo es cruel… pero también es muy hermoso.",
+    "🔥 {nombre}, la única cosa que puedes hacer es no arrepentirte de tu elección.",
+    "🏹 {nombre}, si vas a arriesgar tu vida, necesitas una razón.",
+    "🌌 {nombre}, no te rindas pase lo que pase.",
+    "💥 {nombre}, el deseo y la determinación mueven al cuerpo más allá de sus límites.",
+    "⚔️ {nombre}, el miedo no es malo; te muestra dónde debes mejorar.",
+    "🔥 {nombre}, si quieres vencer, aprende primero a soportar.",
+    "🌌 {nombre}, protégente a ti mismo para poder proteger a otros.",
+    "🔥 {nombre}, tu corazón es tu espada.",
+    "🌙 {nombre}, no te detengas. Respira, concéntrate y avanza.",
+    "⚔️ {nombre}, la determinación enciende un fuego que ni la noche apaga.",
+    "⚖️ {nombre}, para obtener algo, algo de igual valor debe perderse.",
+    "🔥 {nombre}, sigue adelante. No te detengas. No te arrepientas.",
+    "💥 {nombre}, levántate tantas veces como haga falta.",
 ]
 
 def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
@@ -28,9 +59,8 @@ def mensaje_motivador_del_dia(nombre: str, correo_id: str) -> str:
     hoy = date.today().isoformat()
     key = f"mot_msg_{correo_id}_{hoy}"
 
-    # Si no existe para hoy, lo elegimos y guardamos
     if key not in st.session_state:
-        st.session_state[key] = random.choice(MENSAJES_MOTIVADORES).format(nombre=nombre)
+        st.session_state[key] = random.choice(MENSAJES_MOTIVACIONALES).format(nombre=nombre or "Atleta")
 
     return st.session_state[key]
 
@@ -52,6 +82,35 @@ def mostrar_banner_motivador(texto: str):
         unsafe_allow_html=True
     )
 
+# ✅ Normaliza cualquier "ejercicio" a dict uniforme
+def _to_ej_dict(x):
+    if isinstance(x, dict):
+        return x
+    if isinstance(x, str):
+        return {
+            "bloque": "",
+            "seccion": "",
+            "circuito": "",
+            "ejercicio": x,
+            "detalle": "",
+            "series": "",
+            "reps_min": "",
+            "reps_max": "",
+            "peso": "",
+            "tiempo": "",
+            "velocidad": "",
+            "rir": "",
+            "tipo": "",
+            "video": "",
+        }
+    return {}
+
+# ✅ Orden seguro por circuito (quita la definición duplicada)
+def ordenar_circuito(ejercicio):
+    if not isinstance(ejercicio, dict):
+        return 99
+    orden = {"A": 1, "B": 2, "C": 3, "D": 4, "E": 5, "F": 6, "G": 7}
+    return orden.get(str(ejercicio.get("circuito", "")).upper(), 99)
 
 # === Reemplaza ESTA función por una más robusta
 def obtener_lista_ejercicios(data_dia):
@@ -572,19 +631,35 @@ def ver_rutinas():
                         doc_ref = db.collection("rutinas_semanales").document(doc_id_fut)
                         doc = doc_ref.get()
                         if not doc.exists:
-                            continue  # silenciado
+                            continue
 
                         rutina_fut = doc.to_dict().get("rutina", {})
-                        ejercicios_fut = rutina_fut.get(dia_sel, [])
-                        for ef in ejercicios_fut:
-                            if (
-                                ef.get("ejercicio") == nombre_ejercicio and
-                                ef.get("circuito")  == circuito and
-                                (ef.get("bloque") == bloque or ef.get("seccion") == bloque)
-                            ):
-                                peso_futuro_original = float(ef.get("peso", 0))
-                                ef["peso"] = round(peso_futuro_original + delta, 2)
-                        doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+                        # ✅ usar siempre el extractor (soporta dict/list/'ejercicios')
+                        ejercicios_fut_raw = rutina_fut.get(dia_sel, [])
+                        ejercicios_fut = obtener_lista_ejercicios(ejercicios_fut_raw)
+
+                        changed = False
+                        for j, ef_raw in enumerate(ejercicios_fut):
+                            ef = _to_ej_dict(ef_raw)  # <-- normaliza si venía como string
+
+                            mismo_ejercicio = (ef.get("ejercicio", "") == nombre_ejercicio)
+                            mismo_circuito  = (ef.get("circuito", "")  == circuito)
+                            mismo_bloque    = (ef.get("bloque", ef.get("seccion", "")) == bloque)
+
+                            if mismo_ejercicio and mismo_circuito and mismo_bloque:
+                                try:
+                                    base = ef.get("peso", 0)
+                                    base = 0 if base == "" else float(str(base).replace(",", "."))
+                                except Exception:
+                                    base = 0.0
+                                ef["peso"] = round(base + float(delta), 2)
+                                ejercicios_fut[j] = ef
+                                changed = True
+
+                        if changed:
+                            # Guardar el día como lista uniforme
+                            doc_ref.update({f"rutina.{dia_sel}": ejercicios_fut})
+
 
                 # ✅ Actualiza documento actual
                 doc_ref_final = db.collection("rutinas_semanales").document(doc_id)
