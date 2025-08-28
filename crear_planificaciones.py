@@ -10,6 +10,9 @@ from firebase_admin import credentials, firestore
 from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina, aplicar_progresion_rango
 
+# === Soft login (mínimo necesario) ===
+from soft_login_bar import require_login, require_role  # <-- NUEVO
+
 # ---------- utilidades básicas ----------
 def proximo_lunes(base: date | None = None) -> date:
     base = base or date.today()
@@ -69,6 +72,10 @@ def _ensure_len(lista: list[dict], n: int, plantilla: dict):
 
 
 def crear_rutinas():
+    # === Soft login: exige sesión y rol de entrenador/admin ===
+    require_login()  # <-- NUEVO
+    require_role(("entrenador", "admin", "administrador"))  # <-- NUEVO
+
     st.title("Crear nueva rutina")
 
     cols = st.columns([5, 1])
@@ -178,7 +185,6 @@ def crear_rutinas():
                             key=f"circ_{key_entrenamiento}",
                             label_visibility="collapsed"
                         )
-
 
                         # 1) Buscar + 2) Ejercicio
                         if seccion == "Work Out":
@@ -363,6 +369,7 @@ def crear_rutinas():
         ["grupo_muscular_principal", "patron_de_movimiento"]
     )
 
+    ejercicios_dict = cargar_ejercicios()  # asegurar disponible aquí también
     contador = {}
     nombres_originales = {}
     dias_keys = [k for k in st.session_state if k.startswith("rutina_dia_") and "_Work_Out" in k]
