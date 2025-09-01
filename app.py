@@ -19,8 +19,8 @@ from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
 from crear_planificaciones import crear_rutinas
 from editar_rutinas import editar_rutinas
 from crear_descarga import descarga_rutina
-from reportes import ver_reportes
-from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
+#from reportes import ver_reportes
+#from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
 
 # 4) Estilos (opcional)
 st.markdown("""
