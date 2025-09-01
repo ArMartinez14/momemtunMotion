@@ -10,8 +10,8 @@ from firebase_admin import credentials, firestore
 from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina, aplicar_progresion_rango
 
-# === Soft login (mínimo necesario) ===
-from soft_login_bar import require_login, require_role  # <-- NUEVO
+# Opcional si usas la barrera estricta en app.py
+from soft_login_full import soft_login_barrier
 
 # ---------- utilidades básicas ----------
 def proximo_lunes(base: date | None = None) -> date:
@@ -36,11 +36,50 @@ def get_db():
     return firestore.client()
 
 # ---------- Cargas cacheadas ----------
+ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+
 @st.cache_data(show_spinner=False)
 def cargar_ejercicios():
+    """
+    Devuelve { nombre_ejercicio: datos_doc } filtrando según el usuario:
+      - Admin: ve TODOS.
+      - No admin: ve (publico == True) + (entrenador == correo_logueado).
+    """
     db = get_db()
-    docs = db.collection("ejercicios").stream()
-    return {doc.to_dict().get("nombre", ""): (doc.to_dict() or {}) for doc in docs if doc.exists}
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    rol = (st.session_state.get("rol") or "").strip()
+    es_admin = rol in ADMIN_ROLES
+
+    ejercicios_por_nombre: dict[str, dict] = {}
+    try:
+        if es_admin:
+            for doc in db.collection("ejercicios").stream():
+                if not doc.exists: 
+                    continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre:
+                    ejercicios_por_nombre[nombre] = data
+        else:
+            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
+                if not doc.exists: 
+                    continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre:
+                    ejercicios_por_nombre[nombre] = data
+            if correo_usuario:
+                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+                    if not doc.exists: 
+                        continue
+                    data = doc.to_dict() or {}
+                    nombre = (data.get("nombre") or "").strip()
+                    if nombre:
+                        ejercicios_por_nombre[nombre] = data  # sobrescribe si coincide nombre
+    except Exception as e:
+        st.error(f"Error cargando ejercicios: {e}")
+
+    return ejercicios_por_nombre
 
 @st.cache_data(show_spinner=False)
 def cargar_usuarios():
@@ -70,11 +109,15 @@ def _ensure_len(lista: list[dict], n: int, plantilla: dict):
         lista.pop()
     return lista
 
-
+# ==========================
+#   PÁGINA: CREAR RUTINAS
+# ==========================
 def crear_rutinas():
-    # === Soft login: exige sesión y rol de entrenador/admin ===
-    require_login()  # <-- NUEVO
-    require_role(("entrenador", "admin", "administrador"))  # <-- NUEVO
+    # Verificación simple de rol
+    rol = (st.session_state.get("rol") or "").lower()
+    if rol not in ("entrenador", "admin", "administrador"):
+        st.warning("No tienes permisos para crear rutinas.")
+        return
 
     st.title("Crear nueva rutina")
 
@@ -111,6 +154,12 @@ def crear_rutinas():
         st.info(f"🔁 Ajustado automáticamente al lunes {fecha_inicio.isoformat()}.")
 
     semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
+    # === Objetivo de la rutina (opcional) ===
+    objetivo = st.text_area(
+        "🎯 Objetivo de la rutina (opcional)",
+        value=st.session_state.get("objetivo", ""),
+    )
+    st.session_state["objetivo"] = objetivo
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
     entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
@@ -177,7 +226,6 @@ def crear_rutinas():
 
                         # 0) Circuito
                         opciones_circuito = ["A","B","C","D","E","F","G","H","I","J","K","L"]
-
                         fila["Circuito"] = cols[0].selectbox(
                             "",
                             opciones_circuito,
@@ -209,8 +257,8 @@ def crear_rutinas():
                             )
                             if seleccionado != "(sin resultados)":
                                 fila["Ejercicio"] = seleccionado
-                                if not fila.get("Video"):
-                                    fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+                                # ✅ FIX VIDEO: refrescar SIEMPRE desde ejercicios_dict[nombre]["video"]
+                                fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
                         else:
                             cols[1].markdown("&nbsp;", unsafe_allow_html=True)
                             fila["Ejercicio"] = cols[2].text_input(
@@ -369,7 +417,6 @@ def crear_rutinas():
         ["grupo_muscular_principal", "patron_de_movimiento"]
     )
 
-    ejercicios_dict = cargar_ejercicios()  # asegurar disponible aquí también
     contador = {}
     nombres_originales = {}
     dias_keys = [k for k in st.session_state if k.startswith("rutina_dia_") and "_Work_Out" in k]
@@ -490,13 +537,24 @@ def crear_rutinas():
                             "velocidad": ejercicio_mod.get("Velocidad",""),
                             "rir": ejercicio_mod.get("RIR",""),
                             "tipo": ejercicio_mod.get("Tipo",""),
+                            # Si quisieras ver el link en preview, puedes añadirlo:
+                            # "video": ejercicio_mod.get("Video",""),
                         })
 
                     st.dataframe(pd.DataFrame(tabla), use_container_width=True, hide_index=True)
 
-    # ======= Guardar =======
+# ======= Guardar =======
     if st.button("Guardar Rutina"):
-        if nombre_sel and correo and entrenador:
-            guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias_labels)
+        if all([str(nombre_sel).strip(), str(correo).strip(), str(entrenador).strip()]):
+            objetivo = st.session_state.get("objetivo", "")
+            guardar_rutina(
+                nombre_sel.strip(),
+                correo.strip(),
+                entrenador.strip(),
+                fecha_inicio,
+                int(semanas),
+                dias_labels,
+                objetivo=objetivo,
+            )
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
