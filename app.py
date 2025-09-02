@@ -27,12 +27,25 @@ def _init_firestore():
 db = _init_firestore()
 
 # ===== Soft Login =====
-# ✅ Importa SOLO lo que existe en soft_login_full.py
 from soft_login_full import soft_login_barrier, soft_logout
 
 # ===== Utilidades mínimas =====
 def _normalizar_email(s: str) -> str:
     return (s or "").strip().lower().replace(" ", "")
+
+def _read_admin_emails_from_secrets() -> set[str]:
+    """
+    Permite whitelists de admin opcionalmente por secrets:
+    - Como lista: ADMIN_EMAILS = ["admin@dominio.com", "coach@dominio.com"]
+    - O como string separada por comas: ADMIN_EMAILS = "a@b.com,c@d.com"
+    """
+    raw = st.secrets.get("ADMIN_EMAILS", [])
+    if isinstance(raw, (list, tuple, set)):
+        return {str(x).strip().lower() for x in raw if str(x).strip()}
+    try:
+        return {e.strip().lower() for e in str(raw).split(",") if e.strip()}
+    except Exception:
+        return set()
 
 @st.cache_data(ttl=60)
 def _get_user_role(email: str) -> str | None:
@@ -46,6 +59,27 @@ def _get_user_role(email: str) -> str | None:
     except Exception:
         pass
     return None
+
+def _is_staff(rol: str | None, correo: str | None) -> bool:
+    """
+    Staff si:
+    - rol es admin/entrenador
+    - o el correo está en ADMIN_EMAILS (secrets)
+    - o (por compatibilidad con tu flujo previo) DEFAULT_FULL_MENU está en True (por defecto True)
+    """
+    admin_emails = _read_admin_emails_from_secrets()
+    default_full_menu = bool(st.secrets.get("DEFAULT_FULL_MENU", True))
+    r = (rol or "").strip().lower()
+    c = (correo or "").strip().lower()
+
+    if r in ("admin", "entrenador"):
+        return True
+    if c in admin_emails:
+        return True
+    # Compatibilidad: mostrar menú completo por defecto si no hay rol claro
+    if default_full_menu:
+        return True
+    return False
 
 # ===== App principal =====
 def main():
@@ -71,8 +105,8 @@ def main():
         st.markdown("---")
         st.markdown("### Navegación")
 
-        # Ajusta las opciones a tu app real
-        if (rol or "").lower() in ("admin", "entrenador"):
+        # 👇 Lógica ajustada: por defecto muestra menú completo (como tenías antes).
+        if _is_staff(rol, correo):
             opciones = [
                 "Ver Rutinas",
                 "Crear Rutinas",
@@ -100,7 +134,6 @@ def main():
             from ingresar_cliente import ingresar_cliente
             ingresar_cliente()
         elif pagina == "Disponibilidad Coach":
-            # Ajusta si tu módulo expone otra función
             from agenda_disponibilidad import app as disponibilidad_app
             disponibilidad_app()
         else:
@@ -108,7 +141,6 @@ def main():
     except ModuleNotFoundError as e:
         st.error(f"No se encontró el módulo de la página: {e.name}.")
     except Exception as e:
-        # Muestra el traceback completo para depurar en Cloud
         st.exception(e)
 
 if __name__ == "__main__":
