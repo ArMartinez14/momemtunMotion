@@ -27,23 +27,7 @@ MENSAJES_MOTIVACIONALES = [
     "💥 {nombre}, el esfuerzo de hoy es el resultado de mañana.",
 
     # Frases de inspiración anime (sin referencias)
-    "⚡ {nombre}, supera tus límites ahora mismo.",
-    "🔥 {nombre}, no rendirse es tu especialidad.",
-    "🍃 {nombre}, jamás te rindas.",
-    "🔥 {nombre}, cada repetición es un paso más cerca de tu mejor versión.",
-    "🏋️ {nombre}, los límites están en tu mente, el cuerpo puede más.",
-    "🔥 {nombre}, no pares cuando estés cansado, para cuando hayas terminado.",
-    "💪 {nombre}, cada gota de sudor es inversión en tu rendimiento.",
-    "🚀 {nombre}, cada serie cuenta, cada día suma. ¡Hazlo grande!",
-    "🔥 {nombre}, la incomodidad es la señal de que estás creciendo.",
-    "🏹 {nombre}, entrena como si fueras a competir contra tu mejor versión.",
-    "🌌 {nombre}, si quieres resultados distintos, exige más de ti mismo.",
-    "💥 {nombre}, la fuerza no viene de lo que puedes hacer, sino de lo que superas.",
-    "🔥 {nombre}, hoy es el día perfecto para superar tu récord.",
-    "🔥 {nombre}, tu cuerpo puede aguantar más de lo que tu mente cree.",
-    "⚔️ {nombre}, cada levantamiento es una batalla, ¡gánala!",
-    "🔥 {nombre}, no esperes motivación, crea disciplina en cada serie.",
-    "💪 {nombre}, los campeones se forman cuando nadie los ve entrenar.",
+
 ]
 def _to_float_or_none(v):
     try:
