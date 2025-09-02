@@ -41,6 +41,49 @@ def _cookie_flags():
         "same_site": "Lax",   # 👈 API correcta del componente (no 'samesite')
         "secure": secure_flag,
     }
+# soft_login_full.py
+
+def _set_cookie(cm, payload: dict, ttl: int):
+    token = _signer().sign(json.dumps(payload).encode())
+    if isinstance(token, (bytes, bytearray)):
+        token = token.decode()
+
+    # Cache en memoria para el siguiente render
+    st.session_state[_CACHE_TOKEN_KEY] = token
+
+    if not cm:
+        return
+
+    expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl)
+    flags = _cookie_flags()
+
+    # Intento 1: firma moderna (same_site / expires_at)
+    try:
+        cm.set(
+            COOKIE_NAME, token,
+            expires_at=expires_at,
+            key="set_"+COOKIE_NAME,
+            path=flags["path"],
+            same_site=flags["same_site"],
+            secure=flags["secure"],
+        )
+        return
+    except TypeError:
+        pass
+
+    # Intento 2 (fallback): firma antigua (samesite / expires)
+    try:
+        cm.set(
+            COOKIE_NAME, token,
+            expires=expires_at,                 # 👈 nota el nombre
+            key="set_"+COOKIE_NAME,
+            path=flags["path"],
+            samesite=flags["same_site"],        # 👈 nota el nombre
+            secure=flags["secure"],
+        )
+    except Exception:
+        # Último recurso: no romper la app, pero avisar en logs
+        st.warning("No se pudo persistir la cookie de sesión. Revisa la versión de extra-streamlit-components.")
 
 # =========================
 # Firmado
