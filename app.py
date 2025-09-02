@@ -1,137 +1,132 @@
 # app.py
-import streamlit as st
-
-# 1) SIEMPRE PRIMERO
-st.set_page_config(page_title="Aplicación Asesorías", layout="wide")
-
-# 2) Soft login (usa el módulo que ya probaste)
-from soft_login_full import soft_login_barrier, soft_logout
-
-# 3) Imports del resto de la app
+from __future__ import annotations
 import json
+import streamlit as st
 import firebase_admin
-from firebase_admin import credentials, firestore, initialize_app
+from firebase_admin import credentials, firestore
 
-from seccion_ejercicios import base_ejercicios
-from vista_rutinas import ver_rutinas
-from borrar_rutinas import borrar_rutinas
-from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
-from crear_planificaciones import crear_rutinas
-from editar_rutinas import editar_rutinas
-from crear_descarga import descarga_rutina
-#from reportes import ver_reportes
-#from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
+# ⬇️ Soft login (asegúrate de tener soft_login_full.py en el repo)
+from soft_login_full import soft_login_barrier, soft_login_header
 
-# 4) Estilos (opcional)
-st.markdown("""
-<style>
-@media (prefers-color-scheme: light) {
-  h1, h2, h3, h4, h5, h6, p, label, span, li,
-  div[data-testid="stMarkdownContainer"] { color: #111111 !important; }
-  input, textarea, select { color: #111111 !important; }
-}
-@media (prefers-color-scheme: dark) {
-  h1, h2, h3, h4, h5, h6, p, label, span, li,
-  div[data-testid="stMarkdownContainer"] { color: #ffffff !important; }
-  input, textarea, select { color: #ffffff !important; }
-}
-</style>
-""", unsafe_allow_html=True)
-
-# 5) Inicializar Firebase (una sola vez)
-if not firebase_admin._apps:
-    cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-    cred = credentials.Certificate(cred_dict)
-    initialize_app(cred)
-db = firestore.client()
-
-# 6) Barrera de Soft Login (persistente con cookie)
-#    Cambia required_roles si quieres restringir el ingreso a ciertos roles globalmente.
-if not soft_login_barrier(titulo="Bienvenido a Momentum", required_roles=None):
-    st.stop()
-
-# 7) Barra lateral: estado + logout
-email = st.session_state.get("correo", "")
-rol = (st.session_state.get("rol") or "").lower()
-st.sidebar.success(f"Conectado: {email} ({rol})")
-if st.sidebar.button("Cerrar sesión", key="btn_logout"):
-    soft_logout()
-
-# 8) Enrutamiento según rol
-if rol == "deportista":
-    # Vista simplificada: solo puede ver rutinas
-    st.title("🏋️ Tu Rutina")
-    ver_rutinas()
-    st.stop()
-
-# 9) Menú para entrenador/admin
-st.sidebar.title("Menú principal")
-opciones_menu = [
-    "Inicio",
-    "Ver Rutinas",
-    "Crear Rutinas",                 # 🔒 entrenador/admin
-    "Ingresar Deportista o Ejercicio",
-    "Borrar Rutinas",
-    "Editar Rutinas",
-    "Ejercicios",
-    "Crear Descarga",
-    "Reportes",
-]
-
-# Opción extra solo para admin/Administrador
-is_admin = rol in ("admin", "administrador") or (
-    email and st.secrets.get("ADMIN_EMAIL", "").lower() == email.lower()
+# =========================
+# Configuración de página
+# =========================
+st.set_page_config(
+    page_title="Momentum | Rutinas",
+    page_icon="🏋️",
+    layout="wide",
 )
-if is_admin:
-    opciones_menu.append("Resumen (Admin)")
 
-opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu, index=0)
+# =========================
+# Firebase (1 sola vez)
+# =========================
+def init_firebase():
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(json.loads(st.secrets["FIREBASE_CREDENTIALS"]))
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
-# 10) Vistas
-if opcion == "Inicio":
-    primer_nombre = st.session_state.get("primer_nombre") or (
-        email.split("@")[0].title() if email else "Usuario"
-    )
-    st.markdown(f"""
-        <div style='text-align: center; margin-top: 20px;'>
-            <img src='https://i.ibb.co/YL1HbLj/motion-logo.png' width='100' alt='Momentum Logo'><br>
-            <h1 style="font-weight: 800; margin: 8px 0;">
-                👋 Hola {primer_nombre}! — Bienvenido a Momentum
-            </h1>
-            <p style='font-size:18px; margin: 0;'>Selecciona una opción del menú para comenzar</p>
-        </div>
-        """, unsafe_allow_html=True)
+db = init_firebase()
 
-elif opcion == "Ver Rutinas":
-    ver_rutinas()
+# =========================
+# Utilidades
+# =========================
+def normalizar_email(s: str) -> str:
+    return (s or "").strip().lower().replace(" ", "")
 
-elif opcion == "Crear Rutinas":
-    # 🔒 Solo entrenador/admin
-    if rol in ("entrenador", "admin", "administrador"):
-        crear_rutinas()
-    else:
-        st.warning("No tienes permisos para crear rutinas.")
+@st.cache_data(ttl=60)
+def get_user_role(email: str) -> str | None:
+    """
+    Busca el rol del usuario en tu colección 'usuarios'.
+    Ajusta nombres de colección/campos si tus docs difieren.
+    """
+    if not email:
+        return None
 
-elif opcion == "Ingresar Deportista o Ejercicio":
-    ingresar_cliente_o_video_o_ejercicio()
+    # 1) Búsqueda por campo 'correo' (exacto)
+    q = db.collection("usuarios").where("correo", "==", email).limit(1).get()
+    if q:
+        return q[0].to_dict().get("rol")
 
-elif opcion == "Borrar Rutinas":
-    borrar_rutinas()
+    # 2) (Opcional) si guardas correos normalizados en otro campo
+    norm = email.replace("@", "_").replace(".", "_")
+    q2 = db.collection("usuarios").where("correo_normalizado", "==", norm).limit(1).get()
+    if q2:
+        return q2[0].to_dict().get("rol")
 
-elif opcion == "Editar Rutinas":
-    editar_rutinas()
+    return None
 
-elif opcion == "Ejercicios":
-    base_ejercicios()
+def cargar_pagina(nombre: str):
+    """
+    Importa y ejecuta la vista correspondiente.
+    No importes módulos de páginas al tope para evitar
+    efectos colaterales durante el refresco.
+    """
+    try:
+        if nombre == "Ver Rutinas":
+            from vista_rutinas import ver_rutinas
+            ver_rutinas()
+        elif nombre == "Crear Rutinas":
+            from crear_rutinas import crear_rutinas
+            crear_rutinas()
+        elif nombre == "Editar Rutinas":
+            from editar_rutinas import editar_rutinas
+            editar_rutinas()
+        elif nombre == "Ingresar Cliente":
+            from ingresar_cliente import ingresar_cliente
+            ingresar_cliente()
+        elif nombre == "Disponibilidad Coach":
+            from agenda_disponibilidad import app as disponibilidad_app  # ejemplo
+            disponibilidad_app()
+        else:
+            st.info("Selecciona una sección en el menú lateral.")
+    except ModuleNotFoundError as e:
+        st.error(f"No se encontró el módulo de la página: {e.name}.")
+    except Exception as e:
+        st.exception(e)
 
-elif opcion == "Crear Descarga":
-    descarga_rutina()
+# =========================
+# App
+# =========================
+def main():
+    # 1) Barrera de soft login SOLO aquí (no en los módulos importados)
+    email = soft_login_barrier(required_roles=None)  # no bloquea por rol, solo valida sesión
 
-elif opcion == "Reportes":
-    ver_reportes()
+    # 2) Header con correo + botón Cerrar sesión
+    soft_login_header()
 
-elif opcion == "Resumen (Admin)":
-    if is_admin:
-        ver_resumen_entrenadores()
-    else:
-        st.warning("Solo disponible para administradores.")
+    # 3) Rol del usuario
+    email_norm = normalizar_email(email)
+    rol = get_user_role(email_norm)
+    st.session_state["email"] = email_norm
+    st.session_state["rol"] = rol
+
+    # 4) Sidebar
+    with st.sidebar:
+        st.markdown("### 👤 Sesión")
+        st.write(f"**Correo:** {email_norm}")
+        st.write(f"**Rol:** {rol or 'N/D'}")
+
+        st.markdown("---")
+        st.markdown("### Navegación")
+
+        # Menú según rol (ajusta a tus necesidades)
+        if rol in ("admin", "entrenador"):
+            opciones = [
+                "Ver Rutinas",
+                "Crear Rutinas",
+                "Editar Rutinas",
+                "Ingresar Cliente",
+                "Disponibilidad Coach",
+            ]
+        else:
+            # Deportista o rol no definido: solo ver
+            opciones = ["Ver Rutinas"]
+
+        pagina = st.selectbox("Secciones", opciones, key="nav_select")
+
+    # 5) Contenido principal
+    cargar_pagina(pagina)
+
+if __name__ == "__main__":
+    main()
