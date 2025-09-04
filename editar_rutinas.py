@@ -1,37 +1,37 @@
-# editar_rutinas.py
+# crear_rutinas.py — Opción C mejorada (encabezados e inputs en la misma fila)
+import streamlit as st
 import json
 import unicodedata
-from datetime import datetime
-import streamlit as st
+from datetime import date, timedelta, datetime
 import pandas as pd
 
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# ===================== ⚙️ CONFIGURACIÓN RÁPIDA =====================
-# Si agregas un día nuevo con el botón "➕ Agregar día", define cuántas filas
-# base quieres sembrar en Warm Up / Work Out. Deja 0 si no quieres sembrar nada.
-DEFAULT_WU_ROWS_NEW_DAY = 0   # ej. 2
-DEFAULT_WO_ROWS_NEW_DAY = 0   # ej. 3
+from herramientas import aplicar_progresion
+from guardar_rutina_view import guardar_rutina, aplicar_progresion_rango
 
-# ===================== 🔧 UTILIDADES BÁSICAS =====================
-def normalizar_texto(txt: str) -> str:
-    txt = (txt or "").strip().lower()
-    txt = unicodedata.normalize("NFD", txt).encode("ascii", "ignore").decode("utf-8")
-    return txt
+# (opcional)
+from soft_login_full import soft_login_barrier
 
-def _f(v):
-    try:
-        s = str(v).strip().replace(",", ".")
-        if s == "":
-            return None
-        if "-" in s:
-            s = s.split("-", 1)[0].strip()
-        return float(s)
-    except:
-        return None
+# ==========================
+# Utilidades básicas
+# ==========================
+def proximo_lunes(base: date | None = None) -> date:
+    base = base or date.today()
+    dias = (7 - base.weekday()) % 7
+    if dias == 0:
+        dias = 7
+    return base + timedelta(days=dias)
 
-# ===================== 🔥 FIREBASE (init perezoso + cacheado) =====================
+def normalizar_texto(texto: str) -> str:
+    texto = (texto or "").lower().strip()
+    texto = unicodedata.normalize("NFD", texto).encode("ascii", "ignore").decode("utf-8")
+    return texto
+
+# ==========================
+# Firebase (init perezoso)
+# ==========================
 @st.cache_resource(show_spinner=False)
 def get_db():
     if not firebase_admin._apps:
@@ -40,12 +40,50 @@ def get_db():
         firebase_admin.initialize_app(cred)
     return firestore.client()
 
-# ===================== 📦 CARGAS CACHEADAS =====================
+ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+
 @st.cache_data(show_spinner=False)
 def cargar_ejercicios():
+    """
+    Devuelve { nombre_ejercicio: datos_doc } filtrando según el usuario:
+      - Admin: ve TODOS.
+      - No admin: ve (publico == True) + (entrenador == correo_logueado).
+    """
     db = get_db()
-    docs = db.collection("ejercicios").stream()
-    return {doc.to_dict().get("nombre", ""): (doc.to_dict() or {}) for doc in docs if doc.exists}
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    rol = (st.session_state.get("rol") or "").strip()
+    es_admin = rol in ADMIN_ROLES
+
+    ejercicios_por_nombre: dict[str, dict] = {}
+    try:
+        if es_admin:
+            for doc in db.collection("ejercicios").stream():
+                if not doc.exists:
+                    continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre:
+                    ejercicios_por_nombre[nombre] = data
+        else:
+            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
+                if not doc.exists:
+                    continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre:
+                    ejercicios_por_nombre[nombre] = data
+            if correo_usuario:
+                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+                    if not doc.exists:
+                        continue
+                    data = doc.to_dict() or {}
+                    nombre = (data.get("nombre") or "").strip()
+                    if nombre:
+                        ejercicios_por_nombre[nombre] = data  # sobrescribe si coincide nombre
+    except Exception as e:
+        st.error(f"Error cargando ejercicios: {e}")
+
+    return ejercicios_por_nombre
 
 @st.cache_data(show_spinner=False)
 def cargar_usuarios():
@@ -63,543 +101,529 @@ def cargar_implementos():
         impl[str(doc.id)] = d
     return impl
 
-EJERCICIOS  = cargar_ejercicios()
-USUARIOS    = cargar_usuarios()
 IMPLEMENTOS = cargar_implementos()
 
-# ===================== 🎛️ DEFINICIÓN DE COLUMNAS UI =====================
-COLUMNAS_TABLA = [
-    "Circuito", "Sección", "Ejercicio", "Detalle",
-    "Series", "RepsMin", "RepsMax", "Peso", "RIR",
-    "Tiempo", "Velocidad", "Tipo", "Video",
-    "Variable_1", "Cantidad_1", "Operacion_1", "Semanas_1",
-    "Variable_2", "Cantidad_2", "Operacion_2", "Semanas_2",
-    "Variable_3", "Cantidad_3", "Operacion_3", "Semanas_3",
-    "BuscarEjercicio"
-]
+def _ensure_len(lista: list[dict], n: int, plantilla: dict):
+    """Ajusta el largo de la lista al valor n."""
+    if n < 0:
+        n = 0
+    while len(lista) < n:
+        lista.append({k: "" for k in plantilla})
+    while len(lista) > n:
+        lista.pop()
+    return lista
 
-CIRCUITOS = ["A","B","C","D","E","F","G","H","I","J","K","L"]
-COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8]
-HEADERS   = ["Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-             "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar"]
+# ==========================
+#   PÁGINA: CREAR RUTINAS
+# ==========================
+def crear_rutinas():
+    # Verificación simple de rol
+    rol = (st.session_state.get("rol") or "").lower()
+    if rol not in ("entrenador", "admin", "administrador"):
+        st.warning("No tienes permisos para crear rutinas.")
+        return
 
-# ===================== 🔄 DÍAS =====================
-def claves_dias(rutina_dict: dict) -> list[str]:
-    if not rutina_dict:
-        return []
-    solo_dias = [str(k) for k in rutina_dict.keys() if str(k).isdigit()]
-    return sorted(solo_dias, key=lambda x: int(x))
+    st.title("Crear nueva rutina")
 
-# ===================== 🔁 MAPEO UI <-> FIRESTORE =====================
-def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
-    """Convierte un dict de Firestore a la fila usada por la UI (con columnas en mayúsculas)."""
-    fila = {k: "" for k in COLUMNAS_TABLA}
-
-    # Sección (bloque)
-    seccion = ej.get("Sección") or ej.get("bloque") or ""
-    if seccion not in ["Warm Up", "Work Out"]:
-        seccion = "Warm Up" if (ej.get("circuito","") in ["A","B","C"]) else (seccion or "Work Out")
-    fila["Sección"] = seccion
-
-    # Circuito
-    fila["Circuito"] = ej.get("Circuito") or ej.get("circuito") or ""
-
-    # Ejercicio
-    fila["Ejercicio"] = ej.get("Ejercicio") or ej.get("ejercicio") or ""
-
-    # En Work Out, precargar el buscador con el ejercicio actual
-    if fila["Sección"] == "Work Out":
-        fila["BuscarEjercicio"] = fila["Ejercicio"]
-
-    # Otras variables
-    fila["Detalle"]   = ej.get("Detalle")    or ej.get("detalle")    or ""
-    fila["Series"]    = ej.get("Series")     or ej.get("series")     or ""
-    fila["RIR"]       = ej.get("RIR")        or ej.get("rir")        or ""
-    fila["Peso"]      = ej.get("Peso")       or ej.get("peso")       or ""
-    fila["Tiempo"]    = ej.get("Tiempo")     or ej.get("tiempo")     or ""
-    fila["Velocidad"] = ej.get("Velocidad")  or ej.get("velocidad")  or ""
-    fila["Tipo"]      = ej.get("Tipo")       or ej.get("tipo")       or ""
-    fila["Video"]     = ej.get("Video")      or ej.get("video")      or ""
-
-    # Reps
-    if "reps_min" in ej or "reps_max" in ej:
-        fila["RepsMin"] = ej.get("reps_min", "")
-        fila["RepsMax"] = ej.get("reps_max", "")
-    elif "RepsMin" in ej or "RepsMax" in ej:
-        fila["RepsMin"] = ej.get("RepsMin", "")
-        fila["RepsMax"] = ej.get("RepsMax", "")
-    else:
-        rep = str(ej.get("repeticiones", "")).strip()
-        if "-" in rep:
-            mn, mx = rep.split("-", 1)
-            fila["RepsMin"], fila["RepsMax"] = mn.strip(), mx.strip()
-        else:
-            fila["RepsMin"], fila["RepsMax"] = rep, ""
-
-    # Progresiones
-    for p in (1,2,3):
-        fila[f"Variable_{p}"]  = ej.get(f"Variable_{p}",  "")
-        fila[f"Cantidad_{p}"]  = ej.get(f"Cantidad_{p}",  "")
-        fila[f"Operacion_{p}"] = ej.get(f"Operacion_{p}", "")
-        fila[f"Semanas_{p}"]   = ej.get(f"Semanas_{p}",   "")
-
-    return fila
-
-def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
-    """Convierte la fila UI al esquema histórico (minúsculas) y fuerza float/None en numéricos."""
-    seccion = fila.get("Sección", "")
-    if seccion not in ["Warm Up", "Work Out"]:
-        seccion = "Warm Up" if (fila.get("Circuito","") in ["A","B","C"]) else "Work Out"
-
-    series   = _f(fila.get("Series",""))
-    reps_min = _f(fila.get("RepsMin",""))
-    reps_max = _f(fila.get("RepsMax",""))
-    peso     = _f(fila.get("Peso",""))
-    rir      = _f(fila.get("RIR",""))
-    tiempo   = fila.get("Tiempo","")
-    velocidad= fila.get("Velocidad","")
-
-    return {
-        "bloque":     seccion,
-        "circuito":   fila.get("Circuito",""),
-        "ejercicio":  fila.get("Ejercicio",""),
-        "detalle":    fila.get("Detalle",""),
-        "series":     series,
-        "reps_min":   reps_min,
-        "reps_max":   reps_max,
-        "peso":       peso,
-        "tiempo":     tiempo,
-        "velocidad":  velocidad,
-        "rir":        rir,
-        "tipo":       fila.get("Tipo",""),
-        "video":      fila.get("Video",""),
-    }
-
-# ===================== 🧱 FILAS / DÍAS (session_state) =====================
-def _fila_vacia(seccion: str) -> dict:
-    base = {k: "" for k in COLUMNAS_TABLA}
-    base["Sección"] = seccion
-    return base
-
-def _asegurar_dia_en_session(idx_dia: int):
-    """
-    Crea en session_state las listas para Warm Up y Work Out del día dado (1-based),
-    sin padding por defecto. Si defines DEFAULT_* > 0, se siembran filas base SOLO
-    para días nuevos (no afecta a lo cargado desde Firestore).
-    """
-    wu_key = f"rutina_dia_{idx_dia}_Warm_Up"
-    wo_key = f"rutina_dia_{idx_dia}_Work_Out"
-
-    if wu_key not in st.session_state:
-        st.session_state[wu_key] = []
-        if DEFAULT_WU_ROWS_NEW_DAY > 0:
-            st.session_state[wu_key] = [_fila_vacia("Warm Up") for _ in range(DEFAULT_WU_ROWS_NEW_DAY)]
-
-    if wo_key not in st.session_state:
-        st.session_state[wo_key] = []
-        if DEFAULT_WO_ROWS_NEW_DAY > 0:
-            st.session_state[wo_key] = [_fila_vacia("Work Out") for _ in range(DEFAULT_WO_ROWS_NEW_DAY)]
-
-def _agregar_dia():
-    dias = st.session_state.get("dias_editables", [])
-    nuevo_idx = (max([int(d) for d in dias]) + 1) if dias else 1
-    dias.append(str(nuevo_idx))
-    st.session_state["dias_editables"] = dias
-    _asegurar_dia_en_session(nuevo_idx)
-    try:
-        st.rerun()
-    except AttributeError:
-        st.experimental_rerun()
-
-def limpiar_dia(idx_dia: int):
-    """Deja Warm Up y Work Out del día dado en 0 filas (y limpia widgets asociados)."""
-    for seccion in ["Warm Up", "Work Out"]:
-        key = f"rutina_dia_{idx_dia}_{seccion.replace(' ', '_')}"
-        st.session_state[key] = []
-
-    # Borrar estados de widgets del día (i es 0-based en los keys)
-    i0 = idx_dia - 1
-    patrones = [f"_{i0}_Warm_Up_", f"_{i0}_Work_Out_"]
-    claves_borrar = []
-    for k in list(st.session_state.keys()):
-        if any(p in k for p in patrones) or k.startswith(f"multiselect_{i0}_") or k.startswith(f"do_copy_{i0}_"):
-            claves_borrar.append(k)
-    for k in claves_borrar:
-        st.session_state.pop(k, None)
-
-    try:
-        st.rerun()
-    except AttributeError:
-        st.experimental_rerun()
-
-# ===================== 🧩 RENDER DE TABLA POR DÍA/SECCIÓN =====================
-def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: list[str]):
-    key_seccion = f"rutina_dia_{i+1}_{seccion.replace(' ', '_')}"
-    if key_seccion not in st.session_state:
-        st.session_state[key_seccion] = []
-
-    st.subheader(seccion)
-
-    # --- Controles de filas (➕/➖ y "Agregar N") ---
-    ctrl_cols = st.columns([1.4, 1.4, 1.6, 5.6])
-    add_n = ctrl_cols[2].number_input(
-        "N", min_value=1, max_value=10, value=1,
-        key=f"addn_{key_seccion}", label_visibility="collapsed"
-    )
-    if ctrl_cols[0].button("➕ Agregar fila", key=f"add_{key_seccion}"):
-        st.session_state[key_seccion].extend([_fila_vacia(seccion) for _ in range(int(add_n))])
-        st.rerun()
-    if ctrl_cols[1].button("➖ Quitar última", key=f"del_{key_seccion}"):
-        if st.session_state[key_seccion]:
-            st.session_state[key_seccion].pop()
+    cols_top = st.columns([5, 1])
+    with cols_top[1]:
+        if st.button("🔄", help="Recargar catálogos"):
+            st.cache_data.clear()
             st.rerun()
 
-    # Encabezados
-    header_cols = st.columns(COL_SIZES)
-    for c, title in zip(header_cols, HEADERS):
-        c.markdown(
-            f"<div style='text-align:center; white-space:nowrap'><b>{title}</b></div>",
-            unsafe_allow_html=True
-        )
+    ejercicios_dict = cargar_ejercicios()
+    usuarios = cargar_usuarios()
 
-    col_sizes = COL_SIZES
-    ejercicios_dict = EJERCICIOS
+    nombres = sorted(set(u.get("nombre", "") for u in usuarios))
+    correos_entrenadores = sorted([
+        u.get("correo", "") for u in usuarios if (u.get("rol", "") or "").lower() in ["entrenador", "admin", "administrador"]
+    ])
 
-    # Form para “Actualizar sección” (progresiones y copia)
-    with st.form(f"form_{key_seccion}", clear_on_submit=False):
-        for idx, fila in enumerate(st.session_state[key_seccion]):
-            key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
-            cols = st.columns(col_sizes)
+    # === Selección de cliente/semana ===
+    nombre_input = st.text_input("Escribe el nombre del cliente:")
+    coincidencias = [n for n in nombres if nombre_input.lower() in (n or "").lower()]
+    nombre_sel = st.selectbox("Selecciona de la lista:", coincidencias) if coincidencias else ""
 
-            # 0) Circuito
-            opciones_circuito = ["A","B","C","D","E","F","G","H","I","J","K","L"]
-            fila["Circuito"] = cols[0].selectbox(
-                "",
-                opciones_circuito,
-                index=(opciones_circuito.index(fila.get("Circuito")) if fila.get("Circuito") in opciones_circuito else 0),
-                key=f"circ_{key_entrenamiento}",
-                label_visibility="collapsed"
-            )
+    correo_auto = next((u.get("correo", "") for u in usuarios if u.get("nombre") == nombre_sel), "")
+    correo = st.text_input("Correo del cliente:", value=correo_auto)
 
-            # 1) Buscar + 2) Ejercicio
-            if seccion == "Work Out":
-                palabra = cols[1].text_input(
-                    "", value=fila.get("BuscarEjercicio", ""),
-                    key=f"buscar_{key_entrenamiento}", label_visibility="collapsed"
-                )
-                fila["BuscarEjercicio"] = palabra
+    valor_defecto = proximo_lunes()
+    sel = st.date_input(
+        "Fecha de inicio de rutina:",
+        value=valor_defecto,
+        help="Solo se usan lunes. Si eliges otro día, se ajustará automáticamente al lunes de esa semana."
+    )
+    fecha_inicio = sel - timedelta(days=sel.weekday()) if sel.weekday() != 0 else sel
+    if sel.weekday() != 0:
+        st.info(f"🔁 Ajustado automáticamente al lunes {fecha_inicio.isoformat()}.")
 
-                try:
-                    ejercicios_encontrados = (
-                        [n for n in ejercicios_dict.keys()
-                         if all(p in n.lower() for p in palabra.lower().split())]
-                        if palabra.strip() else []
-                    )
-                except Exception:
-                    ejercicios_encontrados = []
+    semanas = st.number_input("Semanas de duración:", min_value=1, max_value=12, value=4)
+    # === Objetivo de la rutina (opcional) ===
+    objetivo = st.text_area(
+        "🎯 Objetivo de la rutina (opcional)",
+        value=st.session_state.get("objetivo", ""),
+    )
+    st.session_state["objetivo"] = objetivo
 
-                seleccionado = cols[2].selectbox(
-                    "", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
-                    key=f"select_{key_entrenamiento}", label_visibility="collapsed"
-                )
-                if seleccionado != "(sin resultados)":
-                    fila["Ejercicio"] = seleccionado
-                    # ✅ refrescar SIEMPRE el video desde la base de ejercicios
-                    fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
-            else:
-                # Warm Up usa texto libre en Ejercicio (como en Crear Rutina)
-                cols[1].markdown("&nbsp;", unsafe_allow_html=True)
-                fila["Ejercicio"] = cols[2].text_input(
-                    "", value=fila.get("Ejercicio",""),
-                    key=f"ej_{key_entrenamiento}", label_visibility="collapsed"
-                )
-
-            # 3) Detalle
-            fila["Detalle"] = cols[3].text_input(
-                "", value=fila.get("Detalle",""),
-                key=f"det_{key_entrenamiento}", label_visibility="collapsed"
-            )
-            # 4) Series
-            fila["Series"] = cols[4].text_input(
-                "", value=fila.get("Series",""),
-                key=f"ser_{key_entrenamiento}", label_visibility="collapsed"
-            )
-            # 5) Reps min/max
-            cmin, cmax = cols[5].columns(2)
-            try:
-                fila["RepsMin"] = cmin.text_input("", value=str(fila.get("RepsMin","")), key=f"rmin_{key_entrenamiento}", label_visibility="collapsed")
-            except:
-                fila["RepsMin"] = ""
-            try:
-                fila["RepsMax"] = cmax.text_input("", value=str(fila.get("RepsMax","")), key=f"rmax_{key_entrenamiento}", label_visibility="collapsed")
-            except:
-                fila["RepsMax"] = ""
-
-            # 6) Peso (ligado a implementos si aplica)
-            peso_widget_key = f"peso_{key_entrenamiento}"
-            peso_value = fila.get("Peso","")
-            pesos_disponibles = []
-            usar_text_input = True
-            try:
-                nombre_ej = fila.get("Ejercicio","")
-                ej_doc = EJERCICIOS.get(nombre_ej, {}) or {}
-                id_impl = str(ej_doc.get("id_implemento","") or "")
-                if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
-                    pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
-                    usar_text_input = not bool(pesos_disponibles)
-            except Exception:
-                usar_text_input = True
-
-            if not usar_text_input:
-                opciones_peso = [str(p) for p in pesos_disponibles]
-                if str(peso_value) not in opciones_peso and opciones_peso:
-                    peso_value = opciones_peso[0]
-                fila["Peso"] = cols[6].selectbox(
-                    "", options=opciones_peso,
-                    index=(opciones_peso.index(str(peso_value)) if str(peso_value) in opciones_peso else 0),
-                    key=peso_widget_key, label_visibility="collapsed"
-                )
-            else:
-                fila["Peso"] = cols[6].text_input(
-                    "", value=str(peso_value),
-                    key=peso_widget_key, label_visibility="collapsed", placeholder="Kg"
-                )
-
-            # 7) RIR
-            fila["RIR"] = cols[7].text_input(
-                "", value=fila.get("RIR",""),
-                key=f"rir_{key_entrenamiento}", label_visibility="collapsed"
-            )
-
-            # 8) Progresión (checkbox centrado)
-            prog_cell = cols[8].columns([1,1,1])
-            mostrar_progresion = prog_cell[1].checkbox("", key=f"prog_check_{key_entrenamiento}_{idx}")
-
-            # 9) Copiar (checkbox centrado)
-            copy_cell = cols[9].columns([1,1,1])
-            mostrar_copia = copy_cell[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
-
-            # === PROGRESIONES ===
-            if mostrar_progresion:
-                st.markdown("#### Progresiones activas")
-                p = int(progresion_activa.split()[-1])  # 1..3
-                pcols = st.columns(4)
-                opciones_var = ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"]
-                opciones_ope = ["", "multiplicacion", "division", "suma", "resta"]
-
-                fila[f"Variable_{p}"] = pcols[0].selectbox(
-                    f"Variable {p}", opciones_var,
-                    index=(opciones_var.index(fila.get(f"Variable_{p}", "")) if fila.get(f"Variable_{p}","") in opciones_var else 0),
-                    key=f"var{p}_{key_entrenamiento}_{idx}"
-                )
-                fila[f"Cantidad_{p}"] = pcols[1].text_input(
-                    f"Cantidad {p}", value=fila.get(f"Cantidad_{p}", ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
-                )
-                fila[f"Operacion_{p}"] = pcols[2].selectbox(
-                    f"Operación {p}", opciones_ope,
-                    index=(opciones_ope.index(fila.get(f"Operacion_{p}", "")) if fila.get(f"Operacion_{p}","") in opciones_ope else 0),
-                    key=f"ope{p}_{key_entrenamiento}_{idx}"
-                )
-                fila[f"Semanas_{p}"] = pcols[3].text_input(
-                    f"Semanas {p}", value=fila.get(f"Semanas_{p}", ""), key=f"sem{p}_{key_entrenamiento}_{idx}"
-                )
-
-            # === Copia a otros días ===
-            if mostrar_copia:
-                st.caption("Selecciona día(s) y presiona **Actualizar sección** para copiar.")
-                dias_copia = st.multiselect(
-                    "Días destino", dias_labels,
-                    key=f"multiselect_{key_entrenamiento}_{idx}"
-                )
-                st.session_state[f"do_copy_{key_entrenamiento}_{idx}"] = True
-            else:
-                st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
-                st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
-
-        # Submit del form
-        submitted = st.form_submit_button("Actualizar sección")
-        if submitted:
-            # Copias dentro de la misma sección
-            for idx, fila in enumerate(st.session_state[key_seccion]):
-                key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
-                do_copy_key = f"do_copy_{key_entrenamiento}_{idx}"
-                multisel_key = f"multiselect_{key_entrenamiento}_{idx}"
-                if st.session_state.get(do_copy_key):
-                    dias_copia = st.session_state.get(multisel_key, [])
-                    for dia_destino in dias_copia:
-                        idx_dia = dias_labels.index(dia_destino)
-                        key_destino = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
-                        if key_destino not in st.session_state:
-                            st.session_state[key_destino] = []
-                        while len(st.session_state[key_destino]) <= idx:
-                            st.session_state[key_destino].append(_fila_vacia(seccion))
-                        st.session_state[key_destino][idx] = {k: v for k, v in fila.items()}
-            st.success("Sección actualizada ✅")
-
-# ===================== ⬇️ CARGA DESDE FIRESTORE A LA UI =====================
-def cargar_doc_en_session(rutina_dict: dict, dias_disponibles: list[str]):
-    # Limpiar claves anteriores
-    for k in list(st.session_state.keys()):
-        if k.startswith("rutina_dia_") or k.startswith("ej_") or k.startswith("buscar_"):
-            st.session_state.pop(k, None)
-
-    # Construir por día (solo días numéricos) — SIN padding
-    dias_ordenados = sorted([int(d) for d in dias_disponibles])
-    for d in dias_ordenados:
-        ejercicios_dia = rutina_dict.get(str(d), []) or []
-        wu, wo = [], []
-        for ej in ejercicios_dia:
-            fila = _ejercicio_firestore_a_fila_ui(ej)
-            (wu if fila.get("Sección") == "Warm Up" else wo).append(fila)
-        st.session_state[f"rutina_dia_{int(d)}_Warm_Up"] = wu
-        st.session_state[f"rutina_dia_{int(d)}_Work_Out"] = wo
-
-    st.session_state["dias_editables"] = [str(d) for d in dias_ordenados]
-
-# ===================== ⬆️ RECOLECTOR UI -> FIRESTORE =====================
-def construir_rutina_desde_session(dias_labels: list[str]) -> dict:
-    nueva = {}
-    for i, _ in enumerate(dias_labels):
-        wu_key = f"rutina_dia_{i+1}_Warm_Up"
-        wo_key = f"rutina_dia_{i+1}_Work_Out"
-        ejercicios = (st.session_state.get(wu_key, []) or []) + (st.session_state.get(wo_key, []) or [])
-        lista = []
-        for fila in ejercicios:
-            lista.append(_fila_ui_a_ejercicio_firestore_legacy(fila))
-        nueva[str(i+1)] = lista
-    return nueva
-
-# ===================== 🧰 PÁGINA PRINCIPAL =====================
-def editar_rutinas():
-    st.title("✏️ Editar Rutina (filas dinámicas por sección)")
-
-    db = get_db()
-
-    # --- Selección de cliente / semana ---
-    clientes_dict = {}
-    for doc in db.collection("rutinas_semanales").stream():
-        data = doc.to_dict() or {}
-        nombre = data.get("cliente")
-        correo = data.get("correo")
-        if nombre and correo:
-            clientes_dict[nombre] = correo
-
-    nombres_clientes = sorted(clientes_dict.keys())
-    nombre_sel = st.selectbox("Selecciona el cliente:", nombres_clientes) if nombres_clientes else ""
-    if not nombre_sel:
-        st.info("No hay clientes con rutinas.")
-        return
-
-    correo = (clientes_dict[nombre_sel] or "").strip().lower()
-
-    # semanas del cliente
-    semanas_dict = {}
-    for doc in db.collection("rutinas_semanales").where("correo","==",correo).stream():
-        data = doc.to_dict() or {}
-        f = data.get("fecha_lunes")
-        if f:
-            semanas_dict[f] = doc.id
-
-    semanas = sorted(semanas_dict.keys())
-    semana_sel = st.selectbox("Selecciona la semana a editar:", semanas) if semanas else ""
-    if not semana_sel:
-        st.warning("Este cliente no tiene semanas registradas.")
-        return
-
-    doc_id_semana = semanas_dict[semana_sel]
-
-    # Leer y filtrar rutina: SOLO días numéricos
-    doc_data = db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict() or {}
-    rutina_raw = doc_data.get("rutina", {}) or {}
-    rutina = {k: v for k, v in rutina_raw.items() if str(k).isdigit()}
-
-    # Días disponibles
-    dias_disponibles = claves_dias(rutina) if rutina else ["1","2","3","4","5"]
-
-    st.markdown("### 📅 Días en la rutina actual:")
-    st.markdown(", ".join([f"**Día {d}**" for d in dias_disponibles]))
-
-    # --- Botón: cargar doc en UI ---
-    if st.button("📥 Cargar rutina seleccionada"):
-        cargar_doc_en_session(rutina, dias_disponibles)
-        st.success("Rutina cargada en el editor ✅")
+    correo_login = (st.session_state.get("correo") or "").strip().lower()
+    entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
 
     st.markdown("---")
+    st.subheader("Días de entrenamiento")
 
-    # ===== Control para agregar días =====
-    col_add = st.columns([1,1,6])
-    with col_add[0]:
-        if st.button("➕ Agregar día"):
-            if "dias_editables" not in st.session_state:
-                cargar_doc_en_session(rutina, dias_disponibles)
-            _agregar_dia()
+    dias_labels = ["Día 1", "Día 2", "Día 3", "Día 4", "Día 5"]
+    tabs = st.tabs(dias_labels)
+    dias = dias_labels  # alias para compat
 
-    # Si aún no hay "dias_editables", usamos los disponibles
-    dias_numericos = st.session_state.get("dias_editables", dias_disponibles)
-    dias_labels = [f"Día {int(d)}" for d in dias_numericos]
+    # Columnas base siempre presentes (sin tiempo/velocidad)
+    BASE_HEADERS = [
+        "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
+        "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar"
+    ]
+    # Tamaños base alineados a tu UI previa
+    BASE_SIZES = [1, 2.0, 2.5, 2.0, 0.8, 1.6, 1.0, 0.8, 1.0, 0.8]
 
-    # Progresión activa
+    # Estructura lógica completa de la fila (para inicializar dicts)
+    columnas_tabla = [
+        "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
+        "Peso", "Tiempo", "Velocidad", "RIR", "Tipo", "Video"
+    ]
+
+    # === Progresión activa (se mantiene) ===
     progresion_activa = st.radio(
         "Progresión activa", ["Progresión 1", "Progresión 2", "Progresión 3"],
         horizontal=True, index=0
     )
 
-    # Tabs por día
-    tabs = st.tabs(dias_labels)
-
     for i, tab in enumerate(tabs):
         with tab:
-            tools_cols = st.columns([1, 9])
-            if tools_cols[0].button("🧹 Limpiar día", key=f"limpiar_dia_{i+1}",
-                                    help="Deja el día con 0 filas en Warm Up y Work Out"):
-                limpiar_dia(i + 1)
+            dia_key = f"rutina_dia_{i+1}"
 
-            _asegurar_dia_en_session(i+1)
-            render_tabla_dia(i, "Warm Up", progresion_activa, dias_labels)
+            for seccion in ["Warm Up", "Work Out"]:
+                key_seccion = f"{dia_key}_{seccion.replace(' ', '_')}"
+                if key_seccion not in st.session_state:
+                    st.session_state[key_seccion] = [{k: "" for k in columnas_tabla} for _ in range(6)]
+                    for f in st.session_state[key_seccion]:
+                        f["Sección"] = seccion
+
+                # --- Encabezado de sección con toggles a la derecha ---
+                head_cols = st.columns([8, 1.2, 1.4], gap="small")
+                with head_cols[0]:
+                    st.subheader(seccion)
+
+                with head_cols[1]:
+                    show_tiempo_sec = st.toggle(
+                        "Tiempo",
+                        key=f"show_tiempo_{key_seccion}",
+                        value=st.session_state.get(f"show_tiempo_{key_seccion}", False),
+                    )
+
+                with head_cols[2]:
+                    show_vel_sec = st.toggle(
+                        "Velocidad",
+                        key=f"show_vel_{key_seccion}",
+                        value=st.session_state.get(f"show_vel_{key_seccion}", False),
+                    )
+
+                # ======= 🧱 Construcción dinámica de columnas y encabezados =======
+                headers = BASE_HEADERS.copy()
+                sizes = BASE_SIZES.copy()
+
+                # Insertar nuevas columnas *antes* de RIR para mantener orden deseado
+                # Índice de RIR en headers base = 7
+                rir_idx = headers.index("RIR")
+
+                if show_tiempo_sec:
+                    headers.insert(rir_idx, "Tiempo")
+                    # tamaño compacto recomendado para campo corto
+                    sizes.insert(rir_idx, 0.9)
+                    rir_idx += 1  # RIR se corre a la derecha
+
+                if show_vel_sec:
+                    headers.insert(rir_idx, "Velocidad")
+                    sizes.insert(rir_idx, 1.0)
+                    # no movemos rir_idx; ya queda a la derecha
+
+                # ---------- FORM por sección ----------
+                with st.form(f"form_{key_seccion}", clear_on_submit=False):
+                    # Control de cantidad de filas
+                    n_filas = st.number_input(
+                        "Filas", key=f"num_{key_seccion}", min_value=0, max_value=30,
+                        value=len(st.session_state[key_seccion]), step=1
+                    )
+                    _ensure_len(st.session_state[key_seccion], n_filas, {k: "" for k in columnas_tabla})
+                    st.markdown("")
+
+                    # Encabezados dinámicos
+                    header_cols = st.columns(sizes)
+                    for c, title in zip(header_cols, headers):
+                        c.markdown(
+                            f"<div style='text-align:center; white-space:nowrap'><b>{title}</b></div>",
+                            unsafe_allow_html=True
+                        )
+
+                    # ------ Render filas ------
+                    for idx, fila in enumerate(st.session_state[key_seccion]):
+                        key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
+                        cols = st.columns(sizes)
+
+                        # Mapeo de posiciones según headers actuales
+                        pos = {h: k for k, h in enumerate(headers)}
+
+                        # 0) Circuito
+                        opciones_circuito = ["A","B","C","D","E","F","G","H","I","J","K","L"]
+                        fila["Circuito"] = cols[pos["Circuito"]].selectbox(
+                            "",
+                            opciones_circuito,
+                            index=(opciones_circuito.index(fila.get("Circuito")) if fila.get("Circuito") in opciones_circuito else 0),
+                            key=f"circ_{key_entrenamiento}",
+                            label_visibility="collapsed"
+                        )
+
+                        # 1) Buscar + 2) Ejercicio
+                        if seccion == "Work Out":
+                            palabra = cols[pos["Buscar Ejercicio"]].text_input(
+                                "", value=fila.get("BuscarEjercicio", ""),
+                                key=f"buscar_{key_entrenamiento}", label_visibility="collapsed"
+                            )
+                            fila["BuscarEjercicio"] = palabra
+
+                            try:
+                                ejercicios_encontrados = (
+                                    [n for n in ejercicios_dict.keys()
+                                     if all(p in n.lower() for p in palabra.lower().split())]
+                                    if palabra.strip() else []
+                                )
+                            except Exception:
+                                ejercicios_encontrados = []
+
+                            seleccionado = cols[pos["Ejercicio"]].selectbox(
+                                "", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
+                                key=f"select_{key_entrenamiento}", label_visibility="collapsed"
+                            )
+                            if seleccionado != "(sin resultados)":
+                                fila["Ejercicio"] = seleccionado
+                                fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+                        else:
+                            cols[pos["Buscar Ejercicio"]].markdown("&nbsp;", unsafe_allow_html=True)
+                            fila["Ejercicio"] = cols[pos["Ejercicio"]].text_input(
+                                "", value=fila.get("Ejercicio",""),
+                                key=f"ej_{key_entrenamiento}", label_visibility="collapsed"
+                            )
+
+                        # 3) Detalle
+                        fila["Detalle"] = cols[pos["Detalle"]].text_input(
+                            "", value=fila.get("Detalle",""),
+                            key=f"det_{key_entrenamiento}", label_visibility="collapsed"
+                        )
+                        # 4) Series
+                        fila["Series"] = cols[pos["Series"]].text_input(
+                            "", value=fila.get("Series",""),
+                            key=f"ser_{key_entrenamiento}", label_visibility="collapsed"
+                        )
+                        # 5) Reps (min/max) — “Repeticiones” ocupa una sola columna en header
+                        # 5) Reps (min/max) — “Repeticiones” ocupa una sola columna en header
+                        cmin, cmax = cols[pos["Repeticiones"]].columns(2)
+
+                        fila["RepsMin"] = cmin.text_input(
+                            "",
+                            value=str(fila.get("RepsMin","")),
+                            key=f"rmin_{key_entrenamiento}",
+                            label_visibility="collapsed",
+                            placeholder="Min"   # 👈 texto de fondo
+                        )
+
+                        fila["RepsMax"] = cmax.text_input(
+                            "",
+                            value=str(fila.get("RepsMax","")),
+                            key=f"rmax_{key_entrenamiento}",
+                            label_visibility="collapsed",
+                            placeholder="Max"   # 👈 texto de fondo
+                        )
+
+                        # 6) Peso
+                        peso_widget_key = f"peso_{key_entrenamiento}"
+                        peso_value = fila.get("Peso","")
+                        pesos_disponibles = []
+                        usar_text_input = True
+                        try:
+                            nombre_ej = fila.get("Ejercicio","")
+                            ej_doc = ejercicios_dict.get(nombre_ej, {}) or {}
+                            id_impl = str(ej_doc.get("id_implemento","") or "")
+                            if id_impl and id_impl != "1" and id_impl in IMPLEMENTOS:
+                                pesos_disponibles = IMPLEMENTOS[id_impl].get("pesos", []) or []
+                                usar_text_input = not bool(pesos_disponibles)
+                        except Exception:
+                            usar_text_input = True
+
+                        if not usar_text_input:
+                            if str(peso_value) not in [str(p) for p in pesos_disponibles]:
+                                peso_value = str(pesos_disponibles[0])
+                            fila["Peso"] = cols[pos["Peso"]].selectbox(
+                                "", options=[str(p) for p in pesos_disponibles],
+                                index=[str(p) for p in pesos_disponibles].index(str(peso_value)),
+                                key=peso_widget_key, label_visibility="collapsed"
+                            )
+                        else:
+                            fila["Peso"] = cols[pos["Peso"]].text_input(
+                                "", value=str(peso_value),
+                                key=peso_widget_key, label_visibility="collapsed", placeholder="Kg"
+                            )
+
+                        # ===== Tiempo / Velocidad dinámicos en la MISMA FILA =====
+                        if "Tiempo" in pos:
+                            fila["Tiempo"] = cols[pos["Tiempo"]].text_input(
+                                "", value=str(fila.get("Tiempo","")),
+                                key=f"tiempo_{key_entrenamiento}",
+                                label_visibility="collapsed", placeholder="Seg"
+                            )
+                        else:
+                            fila.setdefault("Tiempo","")
+
+                        if "Velocidad" in pos:
+                            fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
+                                "", value=str(fila.get("Velocidad","")),
+                                key=f"vel_{key_entrenamiento}",
+                                label_visibility="collapsed", placeholder="m/s"
+                            )
+                        else:
+                            fila.setdefault("Velocidad","")
+
+                        # RIR
+                        fila["RIR"] = cols[pos["RIR"]].text_input(
+                            "", value=fila.get("RIR",""),
+                            key=f"rir_{key_entrenamiento}", label_visibility="collapsed"
+                        )
+
+                        # Progresión (checkbox centrado)
+                        prog_cell = cols[pos["Progresión"]].columns([1, 1, 1])
+                        mostrar_progresion = prog_cell[1].checkbox("", key=f"prog_check_{key_entrenamiento}_{idx}")
+
+                        # Copiar (checkbox centrado)
+                        copy_cell = cols[pos["Copiar"]].columns([1, 1, 1])
+                        mostrar_copia = copy_cell[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
+
+                        # === PROGRESIONES ===
+                        if mostrar_progresion:
+                            st.markdown("#### Progresiones activas")
+                            p = int(progresion_activa.split()[-1])  # 1, 2 o 3
+                            pcols = st.columns(4)
+
+                            variable_key = f"Variable_{p}"
+                            cantidad_key = f"Cantidad_{p}"
+                            operacion_key = f"Operacion_{p}"
+                            semanas_key = f"Semanas_{p}"
+
+                            opciones_var = ["", "peso", "velocidad", "tiempo", "rir", "series", "repeticiones"]
+                            opciones_ope = ["", "multiplicacion", "division", "suma", "resta"]
+
+                            fila[variable_key] = pcols[0].selectbox(
+                                f"Variable {p}",
+                                opciones_var,
+                                index=(opciones_var.index(fila.get(variable_key, "")) if fila.get(variable_key, "") in opciones_var else 0),
+                                key=f"var{p}_{key_entrenamiento}_{idx}"
+                            )
+                            fila[cantidad_key] = pcols[1].text_input(
+                                f"Cantidad {p}", value=fila.get(cantidad_key, ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
+                            )
+                            fila[operacion_key] = pcols[2].selectbox(
+                                f"Operación {p}", opciones_ope,
+                                index=(opciones_ope.index(fila.get(operacion_key, "")) if fila.get(operacion_key, "") in opciones_ope else 0),
+                                key=f"ope{p}_{key_entrenamiento}_{idx}"
+                            )
+                            fila[semanas_key] = pcols[3].text_input(
+                                f"Semanas {p}", value=fila.get(semanas_key, ""), key=f"sem{p}_{key_entrenamiento}_{idx}"
+                            )
+
+                        # === COPIA === (se ejecuta al submit del form)
+                        if mostrar_copia:
+                            copiar_cols = st.columns([1, 3])
+                            st.caption("Selecciona día(s) y presiona **Actualizar sección** para copiar.")
+                            dias_copia = copiar_cols[1].multiselect(
+                                "Días destino",
+                                dias,  # alias de dias_labels
+                                key=f"multiselect_{key_entrenamiento}_{idx}"
+                            )
+                            st.session_state[f"do_copy_{key_entrenamiento}_{idx}"] = True
+                        else:
+                            st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
+                            st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
+
+                    # ---- Submit del FORM: actualiza sección y procesa copias ----
+                    submitted = st.form_submit_button("Actualizar sección")
+                    if submitted:
+                        for idx, fila in enumerate(st.session_state[key_seccion]):
+                            key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
+                            do_copy_key = f"do_copy_{key_entrenamiento}_{idx}"
+                            multisel_key = f"multiselect_{key_entrenamiento}_{idx}"
+
+                            if st.session_state.get(do_copy_key):
+                                dias_copia = st.session_state.get(multisel_key, [])
+                                if dias_copia:
+                                    for dia_destino in dias_copia:
+                                        idx_dia = dias.index(dia_destino)
+                                        key_destino = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
+                                        if key_destino not in st.session_state:
+                                            st.session_state[key_destino] = []
+
+                                        nuevo_ejercicio = {k: v for k, v in fila.items()}
+
+                                        while len(st.session_state[key_destino]) <= idx:
+                                            fila_vacia = {k: "" for k in columnas_tabla}
+                                            fila_vacia["Sección"] = seccion
+                                            st.session_state[key_destino].append(fila_vacia)
+
+                                        st.session_state[key_destino][idx] = nuevo_ejercicio
+                        st.success("Sección actualizada ✅")
+
             st.markdown("---")
-            render_tabla_dia(i, "Work Out", progresion_activa, dias_labels)
-        st.markdown("---")
 
-    # ====== Guardado SOLO en esta semana ======
-    if st.button("💾 Guardar cambios SOLO en esta semana"):
-        dias_labels_save = [f"Día {i}" for i in range(1, len(dias_numericos)+1)]
-        nueva_rutina = construir_rutina_desde_session(dias_labels_save)
-        rutina_existente = doc_data.get("rutina", {}) or {}
-        for k_dia, lista in nueva_rutina.items():
-            if str(k_dia).isdigit():
-                rutina_existente[str(k_dia)] = lista
-        db.collection("rutinas_semanales").document(doc_id_semana).update({"rutina": rutina_existente})
-        st.success("Cambios guardados en la semana seleccionada ✅")
+    # ==========================
+    #  Sidebar de análisis
+    # ==========================
+    st.markdown("---")
+    opcion_categoria = st.sidebar.selectbox(
+        "📋 Categoría para análisis:",
+        ["grupo_muscular_principal", "patron_de_movimiento"]
+    )
 
-    # ====== Aplicar a futuras semanas ======
-    if st.button("⏩ Aplicar cambios a FUTURAS semanas (mismo cliente)"):
-        try:
-            fecha_sel = datetime.strptime(semana_sel, "%Y-%m-%d")
-        except ValueError:
-            st.error("Formato de fecha inválido en 'semana_sel'.")
-            return
+    contador = {}
+    nombres_originales = {}
+    dias_keys = [k for k in st.session_state if k.startswith("rutina_dia_") and "_Work_Out" in k]
 
-        dias_labels_save = [f"Día {i}" for i in range(1, len(dias_numericos)+1)]
-        nueva_rutina = construir_rutina_desde_session(dias_labels_save)
-        total = 0
+    for key_dia in dias_keys:
+        ejercicios = st.session_state.get(key_dia, [])
+        for ejercicio in ejercicios:
+            nombre_raw = str(ejercicio.get("Ejercicio", "")).strip()
+            nombre_norm = normalizar_texto(nombre_raw)
 
-        for doc in db.collection("rutinas_semanales").where("correo","==",correo).stream():
-            data = doc.to_dict() or {}
-            f = data.get("fecha_lunes","")
             try:
-                f_dt = datetime.strptime(f, "%Y-%m-%d")
+                series = int(ejercicio.get("Series", 0))
             except:
+                series = 0
+
+            if not nombre_norm:
                 continue
-            if f_dt >= fecha_sel:
-                rutina_existente = data.get("rutina", {}) or {}
-                for k_dia, lista in nueva_rutina.items():
-                    if str(k_dia).isdigit():
-                        rutina_existente[str(k_dia)] = lista
-                db.collection("rutinas_semanales").document(doc.id).update({"rutina": rutina_existente})
-                total += 1
 
-        st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
+            coincidencias = [
+                data for nombre, data in ejercicios_dict.items()
+                if normalizar_texto(nombre) == nombre_norm
+            ]
+            data = coincidencias[0] if coincidencias else None
 
-# Para ejecución directa en Streamlit multipage
-if __name__ == "__main__":
-    editar_rutinas()
+            if not data:
+                categoria_valor = "(no encontrado)"
+            else:
+                try:
+                    categoria_valor = data.get(opcion_categoria, "(sin dato)")
+                except:
+                    categoria_valor = "(error)"
+
+            categoria_norm = normalizar_texto(str(categoria_valor))
+            if categoria_norm in contador:
+                contador[categoria_norm] += series
+                nombres_originales[categoria_norm].add(categoria_valor)
+            else:
+                contador[categoria_norm] = series
+                nombres_originales[categoria_norm] = {categoria_valor}
+
+    with st.sidebar:
+        st.markdown("### 🧮 Series por categoría")
+        if contador:
+            df = pd.DataFrame({
+                "Categoría": [
+                    ", ".join(sorted(cat.replace("_", " ").capitalize() for cat in nombres_originales[k]))
+                    for k in contador
+                ],
+                "Series": [contador[k] for k in contador]
+            }).sort_values("Series", ascending=False)
+            st.dataframe(df, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay datos de series aún.")
+
+    # ==========================
+    #  Previsualización
+    # ==========================
+    if st.button("🔍 Previsualizar rutina"):
+        st.subheader("📅 Previsualización de todas las semanas con progresiones aplicadas")
+
+        for semana_idx in range(1, int(semanas) + 1):
+            with st.expander(f"Semana {semana_idx}"):
+                for i, dia_nombre in enumerate(dias):
+                    wu_key = f"rutina_dia_{i + 1}_Warm_Up"
+                    wo_key = f"rutina_dia_{i + 1}_Work_Out"
+                    ejercicios = (st.session_state.get(wu_key, []) or []) + (st.session_state.get(wo_key, []) or [])
+                    if not ejercicios:
+                        continue
+
+                    st.write(f"**{dia_nombre}**")
+
+                    tabla = []
+                    for ejercicio in ejercicios:
+                        ejercicio_mod = ejercicio.copy()
+                        seccion = ejercicio_mod.get("Sección") or ("Warm Up" if ejercicio_mod.get("Circuito","") in ["A","B","C"] else "Work Out")
+
+                        # Aplicar progresiones si corresponde a esta semana
+                        for p in range(1, 4):
+                            variable = str(ejercicio.get(f"Variable_{p}", "")).strip().lower()
+                            cantidad = ejercicio.get(f"Cantidad_{p}", "")
+                            operacion = str(ejercicio.get(f"Operacion_{p}", "")).strip().lower()
+                            semanas_txt = str(ejercicio.get(f"Semanas_{p}", ""))
+
+                            if not (variable and operacion and cantidad):
+                                continue
+                            try:
+                                semanas_aplicar = [int(s.strip()) for s in semanas_txt.split(",") if s.strip().isdigit()]
+                            except:
+                                semanas_aplicar = []
+
+                            if semana_idx in semanas_aplicar:
+                                if variable == "repeticiones":
+                                    nuevo_min, nuevo_max = aplicar_progresion_rango(
+                                        ejercicio_mod.get("RepsMin",""), ejercicio_mod.get("RepsMax",""), cantidad, operacion
+                                    )
+                                    ejercicio_mod["RepsMin"], ejercicio_mod["RepsMax"] = nuevo_min, nuevo_max
+                                else:
+                                    key_cap = variable.capitalize()  # Peso, Velocidad, Tiempo, Rir, Series
+                                    val = ejercicio_mod.get(key_cap, "")
+                                    if val != "":
+                                        try:
+                                            ejercicio_mod[key_cap] = aplicar_progresion(val, float(cantidad), operacion)
+                                        except:
+                                            pass
+
+                        # Reps como string
+                        mn, mx = ejercicio_mod.get("RepsMin",""), ejercicio_mod.get("RepsMax","")
+                        rep_str = f"{mn}–{mx}" if mn != "" and mx != "" else (str(mn or mx) if (mn != "" or mx != "") else "")
+
+                        tabla.append({
+                            "bloque": seccion,
+                            "circuito": ejercicio_mod.get("Circuito",""),
+                            "ejercicio": ejercicio_mod.get("Ejercicio",""),
+                            "series": ejercicio_mod.get("Series",""),
+                            "repeticiones": rep_str,
+                            "peso": ejercicio_mod.get("Peso",""),
+                            "tiempo": ejercicio_mod.get("Tiempo",""),
+                            "velocidad": ejercicio_mod.get("Velocidad",""),
+                            "rir": ejercicio_mod.get("RIR",""),
+                            "tipo": ejercicio_mod.get("Tipo",""),
+                        })
+
+                    st.dataframe(pd.DataFrame(tabla), use_container_width=True, hide_index=True)
+
+    # ======= Guardar =======
+    if st.button("Guardar Rutina"):
+        if all([str(nombre_sel).strip(), str(correo).strip(), str(entrenador).strip()]):
+            objetivo = st.session_state.get("objetivo", "")
+            guardar_rutina(
+                nombre_sel.strip(),
+                correo.strip(),
+                entrenador.strip(),
+                fecha_inicio,
+                int(semanas),
+                dias_labels,
+                objetivo=objetivo,
+            )
+            st.success("Rutina guardada ✅")
+        else:
+            st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
