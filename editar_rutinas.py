@@ -62,8 +62,8 @@ div.stButton > button:hover {{ filter:brightness(0.93); }}
 """, unsafe_allow_html=True)
 
 # ===================== ⚙️ CONFIGURACIÓN RÁPIDA =====================
-DEFAULT_WU_ROWS_NEW_DAY = 0   # ej. 2
-DEFAULT_WO_ROWS_NEW_DAY = 0   # ej. 3
+DEFAULT_WU_ROWS_NEW_DAY = 0
+DEFAULT_WO_ROWS_NEW_DAY = 0
 
 # ===================== 🔧 UTILIDADES BÁSICAS =====================
 def normalizar_texto(txt: str) -> str:
@@ -152,6 +152,7 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
     fila["Ejercicio"] = ej.get("Ejercicio") or ej.get("ejercicio") or ""
     if fila["Sección"] == "Work Out":
         fila["BuscarEjercicio"] = fila["Ejercicio"]
+        fila["_exact_on_load"] = True  # 🔧 cambio clave: forzar match exacto solo al cargar
     fila["Detalle"]   = ej.get("Detalle")    or ej.get("detalle")    or ""
     fila["Series"]    = ej.get("Series")     or ej.get("series")     or ""
     fila["RIR"]       = ej.get("RIR")        or ej.get("rir")        or ""
@@ -255,10 +256,8 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
     if key_seccion not in st.session_state:
         st.session_state[key_seccion] = []
 
-    # Encabezado de sección
     st.markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
 
-    # --- Controles de filas (➕/➖ y "Agregar N") ---
     ctrl_cols = st.columns([1.4, 1.4, 1.6, 5.6])
     add_n = ctrl_cols[2].number_input("N", min_value=1, max_value=10, value=1,
                                       key=f"addn_{key_seccion}", label_visibility="collapsed")
@@ -270,7 +269,6 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             st.session_state[key_seccion].pop()
             st.rerun()
 
-    # Encabezados
     header_cols = st.columns(COL_SIZES)
     for c, title in zip(header_cols, HEADERS):
         c.markdown(f"<div class='header-center'>{title}</div>", unsafe_allow_html=True)
@@ -278,7 +276,17 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
     col_sizes = COL_SIZES
     ejercicios_dict = EJERCICIOS
 
-    # Form para “Actualizar sección”
+    def _buscar_fuzzy(palabra: str) -> list[str]:
+        if not palabra.strip():
+            return []
+        tokens = normalizar_texto(palabra).split()
+        res = []
+        for n in ejercicios_dict.keys():
+            nn = normalizar_texto(n)
+            if all(t in nn for t in tokens):
+                res.append(n)
+        return res
+
     with st.form(f"form_{key_seccion}", clear_on_submit=False):
         for idx, fila in enumerate(st.session_state[key_seccion]):
             key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
@@ -299,14 +307,33 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                     key=f"buscar_{key_entrenamiento}", label_visibility="collapsed", placeholder="Buscar…"
                 )
                 fila["BuscarEjercicio"] = palabra
-                try:
-                    ejercicios_encontrados = (
-                        [n for n in ejercicios_dict.keys()
-                         if all(p in n.lower() for p in palabra.lower().split())]
-                        if palabra.strip() else []
-                    )
-                except Exception:
-                    ejercicios_encontrados = []
+
+                nombre_original = (fila.get("Ejercicio","") or "").strip()
+                exact_on_load = bool(fila.get("_exact_on_load", False))  # 🔧 cambio clave
+
+                # Lógica: si estamos en modo exacto y el usuario no cambió la búsqueda, lista = [nombre_original]
+                # Si el usuario escribe algo distinto al original, migramos a fuzzy y apagamos el modo exacto.
+                ejercicios_encontrados = []
+                if exact_on_load:
+                    if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
+                        if nombre_original:
+                            ejercicios_encontrados = [nombre_original]
+                        else:
+                            ejercicios_encontrados = []
+                    else:
+                        ejercicios_encontrados = _buscar_fuzzy(palabra)
+                        fila["_exact_on_load"] = False  # 🔧 ya se salió del modo exacto
+                else:
+                    ejercicios_encontrados = _buscar_fuzzy(palabra)
+
+                # Resguardo: si no hay resultados, mantenemos el original como única opción
+                if not ejercicios_encontrados and nombre_original:
+                    ejercicios_encontrados = [nombre_original]
+
+                # Remover duplicados preservando orden
+                vistos = set()
+                ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
+
                 seleccionado = cols[2].selectbox(
                     "", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
                     key=f"select_{key_entrenamiento}", label_visibility="collapsed"
@@ -344,7 +371,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             except:
                 fila["RepsMax"] = ""
 
-            # Peso (ligado a implementos si aplica)
+            # Peso (implementos)
             peso_widget_key = f"peso_{key_entrenamiento}"
             peso_value = fila.get("Peso","")
             pesos_disponibles, usar_text_input = [], True
@@ -440,7 +467,10 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                             st.session_state[key_destino] = []
                         while len(st.session_state[key_destino]) <= idx:
                             st.session_state[key_destino].append(_fila_vacia(seccion))
-                        st.session_state[key_destino][idx] = {k: v for k, v in fila.items()}
+                        # limpiamos la bandera al copiar
+                        fila_copia = {k: v for k, v in fila.items()}
+                        fila_copia.pop("_exact_on_load", None)
+                        st.session_state[key_destino][idx] = fila_copia
             st.success("Sección actualizada ✅")
 
 # ===================== ⬇️ CARGA DESDE FIRESTORE A LA UI =====================
@@ -454,6 +484,7 @@ def cargar_doc_en_session(rutina_dict: dict, dias_disponibles: list[str]):
         wu, wo = [], []
         for ej in ejercicios_dia:
             fila = _ejercicio_firestore_a_fila_ui(ej)
+            # (la bandera _exact_on_load ya queda colocada dentro para Work Out)
             (wu if fila.get("Sección") == "Warm Up" else wo).append(fila)
         st.session_state[f"rutina_dia_{int(d)}_Warm_Up"] = wu
         st.session_state[f"rutina_dia_{int(d)}_Work_Out"] = wo
@@ -468,6 +499,7 @@ def construir_rutina_desde_session(dias_labels: list[str]) -> dict:
         ejercicios = (st.session_state.get(wu_key, []) or []) + (st.session_state.get(wo_key, []) or [])
         lista = []
         for fila in ejercicios:
+            fila = {k: v for k, v in fila.items() if k != "_exact_on_load"}  # 🔧 no guardar bandera
             lista.append(_fila_ui_a_ejercicio_firestore_legacy(fila))
         nueva[str(i+1)] = lista
     return nueva
@@ -575,15 +607,12 @@ def editar_rutinas():
         except ValueError:
             st.error("Formato de fecha inválido en 'semana_sel'.")
         else:
-            # Asegura días a guardar desde la UI; si no hay, usa los de la rutina cargada
             dias_numericos = st.session_state.get("dias_editables", claves_dias(rutina) or ["1","2","3","4","5"])
             dias_labels_save = [f"Día {i}" for i in range(1, len(dias_numericos)+1)]
 
-            # Construir rutina a partir de la grilla visible
             nueva_rutina = construir_rutina_desde_session(dias_labels_save)
 
             total = 0
-            # Actualiza todas las semanas del mismo cliente con fecha >= semana seleccionada
             for doc in db.collection("rutinas_semanales").where("correo","==",correo).stream():
                 data = doc.to_dict() or {}
                 f = data.get("fecha_lunes","")
@@ -600,11 +629,6 @@ def editar_rutinas():
                     total += 1
 
             st.success(f"✅ Cambios aplicados en {total} semana(s) (incluida la actual).")
-
-# Para ejecución directa en Streamlit multipage
-if __name__ == "__main__":
-    editar_rutinas()
-
 
 # Para ejecución directa en Streamlit multipage
 if __name__ == "__main__":
