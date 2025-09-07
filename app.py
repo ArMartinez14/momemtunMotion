@@ -4,15 +4,21 @@ import streamlit as st
 # 1) SIEMPRE PRIMERO
 st.set_page_config(page_title="Aplicación Asesorías", layout="wide")
 
-# 2) Soft login (usa el módulo que ya probaste)
+# 2) Soft login
 from soft_login_full import soft_login_barrier, soft_logout
 
-# 3) Imports del resto de la app (solo core/infra aquí; vistas se importan más abajo)
+# 3) Firebase
 import json
 import firebase_admin
 from firebase_admin import credentials, firestore, initialize_app
 
-# 4) Estilos (opcional)
+# 4) Router por rol
+from rol_router import set_role_adapter, run_feature, can, ROL_ADMIN, ROL_ENTRENADOR, ROL_DEPORTISTA
+
+# 5) Registrar implementaciones de features de esta app (IMPORTANTE)
+import funciones_asesoria  # noqa: F401 (solo por efectos de registro @exponer)
+
+# ===== Estilos (opcional) =====
 st.markdown("""
 <style>
 @media (prefers-color-scheme: light) {
@@ -28,62 +34,66 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 5) Inicializar Firebase (una sola vez)
+# ===== Firebase (una sola vez) =====
 if not firebase_admin._apps:
     cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
     cred = credentials.Certificate(cred_dict)
     initialize_app(cred)
 db = firestore.client()
 
-# 6) Barrera de Soft Login (persistente con cookie)
-#    Cambia required_roles si quieres restringir el ingreso a ciertos roles globalmente.
+# ===== Soft login barrier =====
 if not soft_login_barrier(titulo="Bienvenido a Momentum", required_roles=None):
     st.stop()
 
-# 7) Barra lateral: estado + logout
+# ===== Estado lateral + logout =====
 email = st.session_state.get("correo", "")
 rol = (st.session_state.get("rol") or "").lower()
 st.sidebar.success(f"Conectado: {email} ({rol})")
 if st.sidebar.button("Cerrar sesión", key="btn_logout"):
     soft_logout()
 
-# 8) Enrutamiento según rol
-if rol == "deportista":
-    # Vista simplificada: solo puede ver rutinas
+# ===== Conectar el router a tu rol actual =====
+def _resolver_rol_actual():
+    return (st.session_state.get("rol") or "").lower()
+set_role_adapter(_resolver_rol_actual)
+
+# ===== Home si es deportista (directo a ver rutinas) =====
+if rol == ROL_DEPORTISTA:
     st.title("🏋️ Tu Rutina")
-    try:
-        from vista_rutinas import ver_rutinas
-        ver_rutinas()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró la vista de rutinas: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("ver_rutinas")  # misma lógica anterior
     st.stop()
 
-# 9) Menú para entrenador/admin (igual que antes)
+# ===== Menú dinámico según permisos =====
 st.sidebar.title("Menú principal")
-opciones_menu = [
-    "Inicio",
-    "Ver Rutinas",
-    "Crear Rutinas",                 # 🔒 entrenador/admin
-    "Ingresar Deportista o Ejercicio",
-    "Borrar Rutinas",
-    "Editar Rutinas",
-    "Ejercicios",
-    "Crear Descarga",
-    "Reportes",
+
+# Mapeo de etiquetas -> feature (capability)
+MENU_ITEMS = [
+    ("Inicio", None),
+    ("Ver Rutinas", "ver_rutinas"),
+    ("Crear Rutinas", "crear_rutinas"),
+    ("Ingresar Deportista o Ejercicio", "gestionar_clientes"),
+    ("Borrar Rutinas", None),             # sigue fija (si quieres puedes moverla al router también)
+    ("Editar Rutinas", "editar_rutinas"),
+    ("Ejercicios", "ejercicios"),
+    ("Crear Descarga", "descargar_rutinas"),
+    ("Reportes", "ver_reportes"),
+    ("Resumen (Admin)", "resumen_admin"),
 ]
 
-# Opción extra solo para admin/Administrador
-is_admin = rol in ("admin", "administrador") or (
-    email and st.secrets.get("ADMIN_EMAIL", "").lower() == email.lower()
-)
-if is_admin:
-    opciones_menu.append("Resumen (Admin)")
+# Filtrar items por permisos del rol actual (si tiene feature/capability)
+def visible_for_role(label: str, feature: str | None) -> bool:
+    if feature is None:
+        # Items “locales” que no pasamos por el router en este ejemplo
+        # (p.ej. "Inicio" y "Borrar Rutinas"). Puedes enrutarlos si quieres.
+        if label == "Resumen (Admin)":
+            return rol in ("admin", "administrador")
+        return True
+    return can(rol, feature)
 
-opcion = st.sidebar.radio("Selecciona una opción:", opciones_menu, index=0)
+menu_labels = [lbl for (lbl, feat) in MENU_ITEMS if visible_for_role(lbl, feat)]
+opcion = st.sidebar.radio("Selecciona una opción:", menu_labels, index=0)
 
-# 10) Vistas (IMPORTS PEREZOSOS después del login)
+# ===== Render según selección =====
 if opcion == "Inicio":
     primer_nombre = st.session_state.get("primer_nombre") or (
         email.split("@")[0].title() if email else "Usuario"
@@ -99,90 +109,30 @@ if opcion == "Inicio":
         """, unsafe_allow_html=True)
 
 elif opcion == "Ver Rutinas":
-    try:
-        from vista_rutinas import ver_rutinas
-        ver_rutinas()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("ver_rutinas")
 
 elif opcion == "Crear Rutinas":
-    # 🔒 Solo entrenador/admin
-    if rol in ("entrenador", "admin", "administrador"):
-        try:
-            from crear_planificaciones import crear_rutinas
-            crear_rutinas()
-        except ModuleNotFoundError as e:
-            st.error(f"No se encontró el módulo: {e.name}.")
-        except Exception as e:
-            st.exception(e)
-    else:
-        st.warning("No tienes permisos para crear rutinas.")
+    run_feature("crear_rutinas")
 
 elif opcion == "Ingresar Deportista o Ejercicio":
-    try:
-        from ingresar_cliente_view import ingresar_cliente_o_video_o_ejercicio
-        ingresar_cliente_o_video_o_ejercicio()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("gestionar_clientes")
 
 elif opcion == "Borrar Rutinas":
-    try:
-        from borrar_rutinas import borrar_rutinas
-        borrar_rutinas()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    # Si quieres, puedes convertir Borrar Rutinas en un feature también:
+    from borrar_rutinas import borrar_rutinas
+    borrar_rutinas()
 
 elif opcion == "Editar Rutinas":
-    try:
-        from editar_rutinas import editar_rutinas
-        editar_rutinas()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("editar_rutinas")
 
 elif opcion == "Ejercicios":
-    try:
-        from seccion_ejercicios import base_ejercicios
-        base_ejercicios()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("ejercicios")
 
 elif opcion == "Crear Descarga":
-    try:
-        from crear_descarga import descarga_rutina
-        descarga_rutina()
-    except ModuleNotFoundError as e:
-        st.error(f"No se encontró el módulo: {e.name}.")
-    except Exception as e:
-        st.exception(e)
+    run_feature("descargar_rutinas")
 
 elif opcion == "Reportes":
-    try:
-        # Si no usas esta vista, puedes comentar la opción en el menú
-        from reportes import ver_reportes
-        ver_reportes()
-    except ModuleNotFoundError as e:
-        st.warning("La sección 'Reportes' no está disponible (módulo ausente).")
-    except Exception as e:
-        st.exception(e)
+    run_feature("ver_reportes")
 
 elif opcion == "Resumen (Admin)":
-    if is_admin:
-        try:
-            from admin_resumen import ver_resumen_entrenadores
-            ver_resumen_entrenadores()
-        except ModuleNotFoundError as e:
-            st.warning("La sección 'Resumen (Admin)' no está disponible (módulo ausente).")
-        except Exception as e:
-            st.exception(e)
-    else:
-        st.warning("Solo disponible para administradores.")
+    run_feature("resumen_admin")
