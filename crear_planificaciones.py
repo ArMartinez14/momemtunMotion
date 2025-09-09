@@ -12,66 +12,107 @@ from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina
 from soft_login_full import soft_login_barrier
 
-# ==========================================
-# PALETA / ESTILOS (idéntico lenguaje visual)
-# ==========================================
-PRIMARY   = "#00C2FF"
-SUCCESS   = "#22C55E"
-WARNING   = "#F59E0B"
-DANGER    = "#EF4444"
-BG_DARK   = "#0B0F14"
-SURFACE   = "#121821"
-TEXT_MAIN = "#FFFFFF"
-TEXT_MUTED= "#94A3B8"
-STROKE    = "rgba(255,255,255,.08)"
+# ==========================
+#  PALETA / ESTILOS con soporte claro/oscuro
+# ==========================
+import streamlit as st
 
-st.markdown(f"""
+# Paleta modo oscuro (la tuya actual, con terracota)
+DARK = dict(
+    PRIMARY   ="#00C2FF",
+    SUCCESS   ="#22C55E",
+    WARNING   ="#F59E0B",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#0B0F14",
+    SURFACE   ="#121821",
+    TEXT_MAIN ="#FFFFFF",
+    TEXT_MUTED="#94A3B8",
+    STROKE    ="rgba(255,255,255,.08)",
+)
+
+# Paleta modo claro (también con terracota)
+LIGHT = dict(
+    PRIMARY   ="#0077FF",
+    SUCCESS   ="#16A34A",
+    WARNING   ="#D97706",
+    DANGER    ="#E2725B",   # ← rojo terracota
+    BG        ="#FFFFFF",
+    SURFACE   ="#F8FAFC",   
+    TEXT_MAIN ="#0F172A",   
+    TEXT_MUTED="#475569",   
+    STROKE    ="rgba(2,6,23,.08)",  
+)
+
+
+# (Opcional) selector manual en la sidebar: Auto / Oscuro / Claro
+with st.sidebar:
+    theme_mode = st.selectbox(
+        "🎨 Tema", ["Auto", "Oscuro", "Claro"],
+        key="theme_mode_crear_rutinas",  # 👈 clave única en esta página
+        help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
+    )
+
+
+def _vars_block(p):
+    return f"""
+    --primary:{p['PRIMARY']}; --success:{p['SUCCESS']}; --warning:{p['WARNING']}; --danger:{p['DANGER']};
+    --bg:{p['BG']}; --surface:{p['SURFACE']}; --muted:{p['TEXT_MUTED']}; --stroke:{p['STROKE']};
+    --text-main:{p['TEXT_MAIN']};
+    """
+
+# CSS: define ambas paletas + sobrescritura según sistema + override manual
+_css = f"""
 <style>
-:root {{
-  --primary:{PRIMARY}; --success:{SUCCESS}; --warning:{WARNING}; --danger:{DANGER};
-  --bg:{BG_DARK}; --surface:{SURFACE}; --muted:{TEXT_MUTED}; --stroke:{STROKE};
+/* Defaults (usaremos LIGHT por accesibilidad si no hay media query) */
+:root {{ {_vars_block(LIGHT)} }}
+
+/* Modo oscuro automático por preferencia del sistema */
+@media (prefers-color-scheme: dark) {{
+  :root {{ {_vars_block(DARK)} }}
 }}
-html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; }}
-h1,h2,h3,h4,h5 {{ color:{TEXT_MAIN}; }}
-p, label, span, div {{ color:{TEXT_MAIN}; }}
-small, .muted {{ color:var(--muted)!important; }}
+
+/* Estilos base que usan variables */
+html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; color:var(--text-main)!important; }}
+h1,h2,h3,h4, label, p, span, div{{ color:var(--text-main); }}
+.muted {{ color:var(--muted); font-size:12px; }}
 .hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:{TEXT_MAIN}; }}
+.card {{ background:var(--surface); border:1px solid var(--stroke); border-radius:12px; padding:12px 14px; }}
+.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
 .h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
-.card {{
-  background:var(--surface); border:1px solid var(--stroke);
-  border-radius:12px; padding:12px 14px; margin:8px 0;
-}}
+
+/* Badges */
 .badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
 .badge--success {{ background:var(--success); color:#06210c; }}
-.badge--warn {{ background:rgba(245,158,11,.15); border:1px solid rgba(245,158,11,.25); color:#FFCF7A; }}
+.badge--pending {{ background:rgba(0,194,255,.15); color:#055160; border:1px solid rgba(0,194,255,.25); }}
+
 /* Botones */
 div.stButton > button[kind="primary"], .stDownloadButton button {{
   background: var(--primary) !important; color:#001018 !important; border:none !important;
   font-weight:700 !important; border-radius:10px !important;
 }}
 div.stButton > button[kind="secondary"] {{
-  background:#1A2431 !important; color:#E0E0E0 !important; border:1px solid var(--stroke) !important;
+  background: var(--surface) !important; color: var(--text-main) !important; border:1px solid var(--stroke) !important;
   border-radius:10px !important;
 }}
 div.stButton > button:hover {{ filter:brightness(0.93); }}
-/* Tabs */
-.stTabs [data-baseweb="tab-list"] button span {{ color:{TEXT_MAIN}; }}
-.stTabs [data-baseweb="tab-highlight"] {{ background:var(--primary)!important; }}
-/* Inputs */
-.stTextInput > div > div > input,
-.stNumberInput input, .stTextArea textarea, .stSelectbox > div > div {{
-  background:#101722 !important; color:{TEXT_MAIN} !important; border:1px solid var(--stroke) !important;
+
+/* Inputs / selects */
+[data-baseweb="input"] input, .stTextInput input, .stSelectbox div, .stSlider, textarea{{
+  color:var(--text-main)!important;
 }}
-/* Sidebar */
-[data-testid="stSidebar"] .sidebar-card {{
-  background:var(--surface); border:1px solid var(--stroke); border-radius:12px;
-  padding:12px 14px; margin:8px 4px 16px;
-}}
-/* Encabezados de tabla */
-.header-center {{ text-align:center; white-space:nowrap; font-weight:700; }}
+/* Sticky CTA */
+.sticky-cta {{ position:sticky; bottom:0; z-index:10; padding-top:8px;
+  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.06)); backdrop-filter: blur(6px); }}
 </style>
-""", unsafe_allow_html=True)
+"""
+
+# Override manual si el usuario lo fuerza
+if theme_mode == "Oscuro":
+    _css += f"<style>:root{{ {_vars_block(DARK)} }}</style>"
+elif theme_mode == "Claro":
+    _css += f"<style>:root{{ {_vars_block(LIGHT)} }}</style>"
+
+st.markdown(_css, unsafe_allow_html=True)
 
 # ==========================
 # Utilidades básicas
@@ -165,6 +206,118 @@ def _ensure_len(lista: list[dict], n: int, plantilla: dict):
     while len(lista) < n: lista.append({k: "" for k in plantilla})
     while len(lista) > n: lista.pop()
     return lista
+# === Helpers para cargar una rutina como base (no alteran guardado) ===
+def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
+    """Mapea un ejercicio guardado en Firestore -> fila UI de crear_rutinas."""
+    fila = {
+        "Sección": "", "Circuito": "", "Ejercicio": "", "Detalle": "",
+        "Series": "", "RepsMin": "", "RepsMax": "", "Peso": "", "RIR": "",
+        "Tiempo": "", "Velocidad": "", "Descanso": "", "Tipo": "", "Video": "",
+        # Campos que ya usa tu UI internamente
+        "BuscarEjercicio": "",
+        "Variable_1": "", "Cantidad_1": "", "Operacion_1": "", "Semanas_1": "",
+        "Variable_2": "", "Cantidad_2": "", "Operacion_2": "", "Semanas_2": "",
+        "Variable_3": "", "Cantidad_3": "", "Operacion_3": "", "Semanas_3": "",
+    }
+
+    # Sección (compatibilidad con 'bloque')
+    seccion = ej.get("Sección") or ej.get("bloque") or ""
+    if seccion not in ["Warm Up", "Work Out"]:
+        seccion = "Warm Up" if (ej.get("circuito","") in ["A","B","C"]) else "Work Out"
+    fila["Sección"] = seccion
+
+    # Campos directos con alias
+    fila["Circuito"]  = ej.get("Circuito")  or ej.get("circuito")  or ""
+    fila["Ejercicio"] = ej.get("Ejercicio") or ej.get("ejercicio") or ""
+    fila["Detalle"]   = ej.get("Detalle")   or ej.get("detalle")   or ""
+    fila["Series"]    = ej.get("Series")    or ej.get("series")    or ""
+    fila["Peso"]      = ej.get("Peso")      or ej.get("peso")      or ""
+    fila["RIR"]       = ej.get("RIR")       or ej.get("rir")       or ""
+    fila["Tiempo"]    = ej.get("Tiempo")    or ej.get("tiempo")    or ""
+    fila["Velocidad"] = ej.get("Velocidad") or ej.get("velocidad") or ""
+    fila["Tipo"]      = ej.get("Tipo")      or ej.get("tipo")      or ""
+    fila["Video"]     = ej.get("Video")     or ej.get("video")     or ""
+
+    # Descanso: puede venir como número o string "3 min"
+    # Descanso: puede venir como "", "3", "3 min", None, número, etc.
+    descanso_raw = ej.get("Descanso") or ej.get("descanso") or ""
+
+    if isinstance(descanso_raw, str):
+        s = descanso_raw.strip()
+        # si está vacío, deja "", si no, toma la primera "palabra" (ej. "3" de "3 min")
+        fila["Descanso"] = s.split()[0] if s else ""
+    elif descanso_raw is None:
+        fila["Descanso"] = ""
+    else:
+        # números u otros tipos simples -> a string
+        try:
+            fila["Descanso"] = str(descanso_raw)
+        except Exception:
+            fila["Descanso"] = ""
+
+    # Reps: distintas variantes guardadas
+    if "RepsMin" in ej or "RepsMax" in ej:
+        fila["RepsMin"] = str(ej.get("RepsMin",""))
+        fila["RepsMax"] = str(ej.get("RepsMax",""))
+    elif "reps_min" in ej or "reps_max" in ej:
+        fila["RepsMin"] = str(ej.get("reps_min",""))
+        fila["RepsMax"] = str(ej.get("reps_max",""))
+    else:
+        rep = str(ej.get("repeticiones","")).strip()
+        if "-" in rep:
+            mn, mx = rep.split("-", 1)
+            fila["RepsMin"], fila["RepsMax"] = mn.strip(), mx.strip()
+        else:
+            fila["RepsMin"], fila["RepsMax"] = rep, ""
+
+    # Pista + modo exacto al cargar (igual que en editar)
+    if fila["Sección"] == "Work Out":
+        fila["BuscarEjercicio"] = fila["Ejercicio"]
+        fila["_exact_on_load"] = True  # ← forzar match exacto sólo al cargar
+
+
+    # Asegurar circuito válido según sección (usas clamp_circuito_por_seccion)
+    try:
+        fila["Circuito"] = clamp_circuito_por_seccion(fila.get("Circuito","") or "", fila["Sección"])
+    except Exception:
+        pass
+
+    return fila
+
+def _vaciar_dias_en_session():
+    """Limpia todos los días ya cargados en session_state para evitar mezclas."""
+    keys = [k for k in list(st.session_state.keys()) if k.startswith("rutina_dia_")]
+    for k in keys:
+        st.session_state.pop(k, None)
+    # también limpiamos flags/copias temporales
+    for k in list(st.session_state.keys()):
+        if any(p in k for p in ["_Warm_Up_", "_Work_Out_", "multiselect_", "do_copy_"]):
+            st.session_state.pop(k, None)
+
+def cargar_doc_en_session_base(rutina_dict: dict):
+    """
+    Carga la rutina (solo días numéricos) a las claves:
+      - rutina_dia_{N}_Warm_Up
+      - rutina_dia_{N}_Work_Out
+    que tu UI ya usa en crear_rutinas.
+    """
+    _vaciar_dias_en_session()
+    if not rutina_dict:
+        return
+
+    # Considera únicamente claves numéricas (tus días)
+    dias_ordenados = sorted([int(d) for d in rutina_dict.keys() if str(d).isdigit()])
+    for d in dias_ordenados:
+        ejercicios_dia = rutina_dict.get(str(d), []) or []
+        wu, wo = [], []
+        for ej in ejercicios_dia:
+            fila = _ejercicio_firestore_a_fila_ui_min(ej)
+            if fila.get("Sección") == "Warm Up":
+                wu.append(fila)
+            else:
+                wo.append(fila)
+        st.session_state[f"rutina_dia_{int(d)}_Warm_Up"] = wu
+        st.session_state[f"rutina_dia_{int(d)}_Work_Out"] = wo
 
 # ==========================
 #   PÁGINA: CREAR RUTINAS
@@ -219,6 +372,63 @@ def crear_rutinas():
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
     entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
+    # === 📥 Cargar rutina previa del MISMO cliente como base (opcional) ===
+    with st.expander("📥 Cargar rutina previa como base", expanded=False):
+        correo_base = (correo or "").strip().lower()
+        if not correo_base:
+            st.info("Primero selecciona el **nombre** (para autocompletar) y el **correo** del cliente.")
+        else:
+            db = get_db()
+            # Trae semanas disponibles para este correo
+            semanas_dict = {}
+            try:
+                for doc in db.collection("rutinas_semanales").where("correo", "==", correo_base).stream():
+                    data = doc.to_dict() or {}
+                    f = data.get("fecha_lunes")
+                    if f:
+                        semanas_dict[f] = doc.id
+            except Exception as e:
+                st.error(f"Error leyendo semanas: {e}")
+
+            if not semanas_dict:
+                st.info("Este cliente aún no tiene semanas guardadas en 'rutinas_semanales'.")
+            else:
+                semanas_ordenadas = sorted(semanas_dict.keys())
+
+                # índice por defecto = última semana, acotado al rango válido
+                default_idx = (len(semanas_ordenadas) - 1) if semanas_ordenadas else 0
+                default_idx = max(0, min(default_idx, len(semanas_ordenadas) - 1)) if semanas_ordenadas else 0
+
+                semana_base = st.selectbox(
+                    "Semana a usar como base:",
+                    semanas_ordenadas,
+                    index=default_idx,
+                    key="sel_semana_base_crear",   # clave única
+                )
+
+                if st.button("📥 Cargar como base (no guarda nada)", type="secondary", key="btn_cargar_base_crear"):
+                    try:
+                        doc_id = semanas_dict.get(semana_base)
+                        if not doc_id:
+                            st.warning("No se encontró el documento de esa semana.")
+                        else:
+                            doc_data = db.collection("rutinas_semanales").document(doc_id).get().to_dict() or {}
+                            rutina_raw = doc_data.get("rutina", {}) or {}
+                            # Solo días numéricos
+                            rutina_base = {k: v for k, v in rutina_raw.items() if str(k).isdigit()}
+
+                            # Carga en session_state
+                            cargar_doc_en_session_base(rutina_base)
+
+                            st.success(f"Rutina de la semana {semana_base} cargada como base ✅")
+
+                            # 🔁 Importante: forzar un rerun inmediato para evitar desincronización
+                            # de índices en selectboxes (causa típica de 'list index out of range').
+                            st.rerun()
+                    except Exception as e:
+                        import traceback
+                        st.error(f"No se pudo cargar la rutina base: {e}")
+                        st.code("".join(traceback.format_exc()))
 
     st.markdown("</div>", unsafe_allow_html=True)  # /card
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
@@ -335,26 +545,57 @@ def crear_rutinas():
 
                         # Buscar + Ejercicio
                         if seccion == "Work Out":
+                            # === Buscar + Ejercicio (modo exacto al cargar, luego fuzzy) ===
                             palabra = cols[pos["Buscar Ejercicio"]].text_input(
                                 "", value=fila.get("BuscarEjercicio", ""),
                                 key=f"buscar_{key_entrenamiento}", label_visibility="collapsed", placeholder="Buscar…"
                             )
                             fila["BuscarEjercicio"] = palabra
-                            try:
-                                ejercicios_encontrados = (
-                                    [n for n in ejercicios_dict.keys()
-                                     if all(p in n.lower() for p in palabra.lower().split())]
-                                    if palabra.strip() else []
-                                )
-                            except Exception:
-                                ejercicios_encontrados = []
+
+                            nombre_original = (fila.get("Ejercicio","") or "").strip()
+                            exact_on_load = bool(fila.get("_exact_on_load", False))
+
+                            def _buscar_fuzzy_local(q: str) -> list[str]:
+                                if not q.strip():
+                                    return []
+                                tokens = normalizar_texto(q).split()
+                                res = []
+                                for n in ejercicios_dict.keys():
+                                    nn = normalizar_texto(n)
+                                    if all(t in nn for t in tokens):
+                                        res.append(n)
+                                return res
+
+                            # Construye lista de opciones
+                            if exact_on_load:
+                                # Si no escribiste nada o escribiste exactamente el original -> lista exacta
+                                if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
+                                    ejercicios_encontrados = [nombre_original] if nombre_original else []
+                                else:
+                                    # El usuario cambió la búsqueda -> pasa a fuzzy y desactiva exact_on_load
+                                    ejercicios_encontrados = _buscar_fuzzy_local(palabra)
+                                    fila["_exact_on_load"] = False
+                            else:
+                                ejercicios_encontrados = _buscar_fuzzy_local(palabra)
+
+                            # Fallback: si no hay resultados y tenemos un original, mantenlo como única opción
+                            if not ejercicios_encontrados and nombre_original:
+                                ejercicios_encontrados = [nombre_original]
+
+                            # Quita duplicados preservando orden
+                            vistos = set()
+                            ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
+
                             seleccionado = cols[pos["Ejercicio"]].selectbox(
-                                "", ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
-                                key=f"select_{key_entrenamiento}", label_visibility="collapsed"
+                                "",
+                                ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
+                                key=f"select_{key_entrenamiento}",
+                                label_visibility="collapsed"
                             )
                             if seleccionado != "(sin resultados)":
                                 fila["Ejercicio"] = seleccionado
                                 fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+
                         else:
                             # Warm Up: sin buscador, nombre libre
                             cols[pos["Buscar Ejercicio"]].markdown("&nbsp;", unsafe_allow_html=True)
@@ -400,18 +641,26 @@ def crear_rutinas():
                             usar_text_input = True
 
                         if not usar_text_input and pesos_disponibles:
-                            if str(peso_value) not in [str(p) for p in pesos_disponibles]:
-                                peso_value = str(pesos_disponibles[0])
+                            opciones_peso = [str(p) for p in pesos_disponibles]
+                            # Normaliza el valor actual al set de opciones
+                            if str(peso_value) not in opciones_peso and opciones_peso:
+                                peso_value = opciones_peso[0]
+                            # Índice seguro (0 si no está)
+                            idx_peso = opciones_peso.index(str(peso_value)) if str(peso_value) in opciones_peso else 0
+
                             fila["Peso"] = cols[pos["Peso"]].selectbox(
-                                "", options=[str(p) for p in pesos_disponibles],
-                                index=[str(p) for p in pesos_disponibles].index(str(peso_value)),
-                                key=peso_widget_key, label_visibility="collapsed"
+                                "",
+                                options=opciones_peso,
+                                index=idx_peso,                  # ← evita index out of range
+                                key=peso_widget_key,
+                                label_visibility="collapsed"
                             )
                         else:
                             fila["Peso"] = cols[pos["Peso"]].text_input(
                                 "", value=str(peso_value),
                                 key=peso_widget_key, label_visibility="collapsed", placeholder="Kg"
                             )
+
 
                         # Tiempo / Velocidad / Descanso dinámicos
                         if "Tiempo" in pos:
