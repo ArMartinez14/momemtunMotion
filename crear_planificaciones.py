@@ -159,30 +159,7 @@ def cargar_ejercicios():
     rol = (st.session_state.get("rol") or "").strip()
     es_admin = rol in ADMIN_ROLES
 
-    ejercicios_por_nombre: dict[str, dict] = {}
-    try:
-        if es_admin:
-            for doc in db.collection("ejercicios").stream():
-                if not doc.exists: continue
-                data = doc.to_dict() or {}
-                nombre = (data.get("nombre") or "").strip()
-                if nombre: ejercicios_por_nombre[nombre] = data
-        else:
-            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
-                if not doc.exists: continue
-                data = doc.to_dict() or {}
-                nombre = (data.get("nombre") or "").strip()
-                if nombre: ejercicios_por_nombre[nombre] = data
-            if correo_usuario:
-                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
-                    if not doc.exists: continue
-                    data = doc.to_dict() or {}
-                    nombre = (data.get("nombre") or "").strip()
-                    if nombre: ejercicios_por_nombre[nombre] = data
-    except Exception as e:
-        st.error(f"Error cargando ejercicios: {e}")
-    return ejercicios_por_nombre
-
+    
 @st.cache_data(show_spinner=False)
 def cargar_usuarios():
     db = get_db()
