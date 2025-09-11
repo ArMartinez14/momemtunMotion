@@ -155,11 +155,31 @@ ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
 @st.cache_data(show_spinner=False)
 def cargar_ejercicios():
     db = get_db()
-    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
-    rol = (st.session_state.get("rol") or "").strip()
-    es_admin = rol in ADMIN_ROLES
+    ejercicios_por_nombre: dict[str, dict] = {}
 
-    
+    def _nombre_visible(d: dict, doc_id: str) -> str:
+        # Toma el nombre desde los campos más comunes, o usa el ID como fallback
+        return (
+            d.get("nombre")
+            or d.get("Nombre")
+            or d.get("ejercicio")
+            or d.get("Ejercicio")
+            or doc_id
+        ).strip()
+
+    try:
+        for doc in db.collection("ejercicios").stream():
+            if not doc.exists:
+                continue
+            data = doc.to_dict() or {}
+            nombre = _nombre_visible(data, doc.id)
+            if nombre:
+                ejercicios_por_nombre[nombre] = data
+    except Exception as e:
+        st.error(f"Error cargando ejercicios: {e}")
+
+    return ejercicios_por_nombre
+
 @st.cache_data(show_spinner=False)
 def cargar_usuarios():
     db = get_db()
