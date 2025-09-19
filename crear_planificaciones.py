@@ -1,12 +1,11 @@
 # crear_rutinas.py — Mismo estilo que ver_rutinas.py (solo UI/colores) + Restricción de circuitos por sección
 import streamlit as st
-import json
 import unicodedata
 from datetime import date, timedelta, datetime
 import pandas as pd
-
-import firebase_admin
-from firebase_admin import credentials, firestore
+# Catálogos para caracteristica / patrón / grupo
+from servicio_catalogos import get_catalogos, add_item
+from firebase_admin import firestore
 
 from herramientas import aplicar_progresion
 from guardar_rutina_view import guardar_rutina
@@ -44,13 +43,21 @@ LIGHT = dict(
 )
 
 
-# (Opcional) selector manual en la sidebar: Auto / Oscuro / Claro
-with st.sidebar:
-    theme_mode = st.selectbox(
-        "🎨 Tema", ["Auto", "Oscuro", "Claro"],
-        key="theme_mode_crear_rutinas",  # 👈 clave única en esta página
-        help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
-    )
+from app_core.firebase_client import get_db
+from app_core.theme import inject_theme
+
+# Selector de tema (ahora en la cabecera principal)
+control_bar = st.container()
+with control_bar:
+    control_cols = st.columns([4, 1])
+    with control_cols[1]:
+        theme_mode = st.selectbox(
+            "🎨 Tema",
+            ["Auto", "Oscuro", "Claro"],
+            key="theme_mode_crear_rutinas",
+            help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores.",
+            label_visibility="collapsed",
+        )
 
 
 def _vars_block(p):
@@ -60,59 +67,45 @@ def _vars_block(p):
     --text-main:{p['TEXT_MAIN']};
     """
 
-# CSS: define ambas paletas + sobrescritura según sistema + override manual
-_css = f"""
+# CSS/tema unificado
+inject_theme()
+
+# 👇 Aquí pegas el CSS de centrado de checkboxes
+st.markdown("""
 <style>
-/* Defaults (usaremos LIGHT por accesibilidad si no hay media query) */
-:root {{ {_vars_block(LIGHT)} }}
-
-/* Modo oscuro automático por preferencia del sistema */
-@media (prefers-color-scheme: dark) {{
-  :root {{ {_vars_block(DARK)} }}
-}}
-
-/* Estilos base que usan variables */
-html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; color:var(--text-main)!important; }}
-h1,h2,h3,h4, label, p, span, div{{ color:var(--text-main); }}
-.muted {{ color:var(--muted); font-size:12px; }}
-.hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
-.card {{ background:var(--surface); border:1px solid var(--stroke); border-radius:12px; padding:12px 14px; }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
-.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
-
-/* Badges */
-.badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
-.badge--success {{ background:var(--success); color:#06210c; }}
-.badge--pending {{ background:rgba(0,194,255,.15); color:#055160; border:1px solid rgba(0,194,255,.25); }}
-
-/* Botones */
-div.stButton > button[kind="primary"], .stDownloadButton button {{
-  background: var(--primary) !important; color:#001018 !important; border:none !important;
-  font-weight:700 !important; border-radius:10px !important;
-}}
-div.stButton > button[kind="secondary"] {{
-  background: var(--surface) !important; color: var(--text-main) !important; border:1px solid var(--stroke) !important;
-  border-radius:10px !important;
-}}
-div.stButton > button:hover {{ filter:brightness(0.93); }}
-
-/* Inputs / selects */
-[data-baseweb="input"] input, .stTextInput input, .stSelectbox div, .stSlider, textarea{{
-  color:var(--text-main)!important;
-}}
-/* Sticky CTA */
-.sticky-cta {{ position:sticky; bottom:0; z-index:10; padding-top:8px;
-  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.06)); backdrop-filter: blur(6px); }}
+div[data-testid="stCheckbox"] {
+  margin: 0 !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+div[data-testid="stCheckbox"] > label {
+  width: 100%;
+  height: 40px;   /* ajusta 38–42px si necesitas */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+div[data-testid="stCheckbox"] > label p {
+  margin: 0 !important;
+}
 </style>
-"""
+""", unsafe_allow_html=True)
 
-# Override manual si el usuario lo fuerza
-if theme_mode == "Oscuro":
-    _css += f"<style>:root{{ {_vars_block(DARK)} }}</style>"
-elif theme_mode == "Claro":
-    _css += f"<style>:root{{ {_vars_block(LIGHT)} }}</style>"
+st.markdown("""
+<style>
+/* Centrar los encabezados de las columnas */
+thead tr th div[data-testid="stMarkdownContainer"] {
+    text-align: center !important;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+</style>
+""", unsafe_allow_html=True)
 
-st.markdown(_css, unsafe_allow_html=True)
 
 # ==========================
 # Utilidades básicas
@@ -128,6 +121,14 @@ def normalizar_texto(texto: str) -> str:
     texto = unicodedata.normalize("NFD", texto).encode("ascii", "ignore").decode("utf-8")
     return texto
 
+def tiene_video(nombre_ejercicio: str, ejercicios_dict: dict[str, dict]) -> bool:
+    if not nombre_ejercicio:
+        return False
+    data = ejercicios_dict.get(nombre_ejercicio, {}) or {}
+    link = str(data.get("video", "") or "").strip()
+    return bool(link)
+
+
 def get_circuit_options(seccion: str) -> list[str]:
     """Devuelve circuitos válidos según sección."""
     if (seccion or "").lower().strip() == "warm up":
@@ -139,45 +140,142 @@ def clamp_circuito_por_seccion(circ: str, seccion: str) -> str:
     opciones = get_circuit_options(seccion)
     return circ if circ in opciones else opciones[0]
 
+# === Helpers para detectar implemento por Marca + Máquina (mismo criterio que admin) ===
+import re as _re_mod
+
+def _norm_text_admin(s: str) -> str:
+    """Normaliza para comparar: sin acentos, trim, casefold (igual a admin)."""
+    import unicodedata
+    s = str(s or "")
+    s = unicodedata.normalize("NFKD", s).encode("ASCII", "ignore").decode("utf-8")
+    s = _re_mod.sub(r"\s+", " ", s).strip().casefold()
+    return s
+
+def _resolver_id_implemento(marca: str, maquina: str) -> str:
+    """
+    Devuelve el id_implemento si hay match único por marca+máquina en 'implementos'.
+    Si no hay o es ambiguo, retorna ''.
+    """
+    db = get_db()
+    marca_in = (marca or "").strip()
+    maquina_in = (maquina or "").strip()
+    if not marca_in or not maquina_in:
+        return ""
+
+    # 1) Intento exacto
+    try:
+        q = (db.collection("implementos")
+                .where("marca", "==", marca_in)
+                .where("maquina", "==", maquina_in))
+        hits = list(q.stream())
+        if len(hits) == 1:
+            return hits[0].id
+        elif len(hits) >= 2:
+            return ""  # ambiguo
+    except Exception:
+        pass
+
+    # 2) Fallback normalizado (memoria)
+    mkey, maqkey = _norm_text_admin(marca_in), _norm_text_admin(maquina_in)
+    try:
+        candidatos = []
+        for d in db.collection("implementos").limit(1000).stream():
+            data = d.to_dict() or {}
+            if _norm_text_admin(data.get("marca")) == mkey and _norm_text_admin(data.get("maquina")) == maqkey:
+                candidatos.append(d.id)
+        return candidatos[0] if len(candidatos) == 1 else ""
+    except Exception:
+        return ""
+
 # ==========================
-# Firebase (init perezoso)
+# Firebase (uso centralizado)
 # ==========================
-@st.cache_resource(show_spinner=False)
-def get_db():
-    if not firebase_admin._apps:
-        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
-    return firestore.client()
 
 ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+# ===== Roles / Helpers =====
+ADMIN_ROLES = {"admin", "administrador", "owner"}
+# ===== Roles / Helpers =====
+def _tiene_permiso_agregar() -> bool:
+    rol = (st.session_state.get("rol") or "").strip().lower()
+    return rol in {"admin", "administrador", "entrenador"}
+
+def es_admin() -> bool:
+    rol = (st.session_state.get("rol") or "").strip().lower()
+    return rol in {r.lower() for r in ADMIN_ROLES}
+
+def correo_actual() -> str:
+    return (st.session_state.get("correo") or "").strip().lower()
+
+def slug_nombre(n: str) -> str:
+    nn = normalizar_texto(n)
+    return nn.replace(" ", "_")
+
+def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
+    """
+    Crea/actualiza el ejercicio en la colección 'ejercicios' con reglas por rol.
+    - Admin: puede publicar; doc_id = slug(nombre)
+    - Entrenador: privado y asignado a su correo; doc_id = slug(nombre)+'__'+correo
+    """
+    db = get_db()
+    _es_admin = es_admin()
+    _correo = correo_actual()
+
+    # admins pueden marcar público desde el popover
+    publico_flag = bool(payload_base.pop("publico_flag", False)) if _es_admin else False
+
+    # ⚠️ Guardamos todas las claves que la UI usa aguas abajo
+    meta = {
+        "nombre": nombre_final,
+        "video": payload_base.get("video", ""),
+        "implemento": payload_base.get("implemento", ""),
+        "detalle": payload_base.get("detalle", ""),
+        "caracteristica": payload_base.get("caracteristica", ""),
+        "patron_de_movimiento": payload_base.get("patron_de_movimiento", ""),
+        "grupo_muscular_principal": payload_base.get("grupo_muscular_principal", ""),
+        # alias legacy para compatibilidad con docs antiguos
+        "grupo_muscular": payload_base.get("grupo_muscular_principal", ""),
+        "buscable_id": slug_nombre(nombre_final),
+        "publico": publico_flag,
+        "entrenador": ("" if _es_admin else _correo),
+        "updated_at": firestore.SERVER_TIMESTAMP,
+        "created_at": firestore.SERVER_TIMESTAMP,
+    }
+
+    # si viene algo extra en payload, no lo perdemos
+    meta.update(payload_base or {})
+
+    doc_id = slug_nombre(nombre_final) if _es_admin else f"{slug_nombre(nombre_final)}__{_correo or 'sin_correo'}"
+    db.collection("ejercicios").document(doc_id).set(meta, merge=True)
 
 @st.cache_data(show_spinner=False)
 def cargar_ejercicios():
     db = get_db()
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    rol = (st.session_state.get("rol") or "").strip()
+    es_admin = rol in ADMIN_ROLES
+
     ejercicios_por_nombre: dict[str, dict] = {}
-
-    def _nombre_visible(d: dict, doc_id: str) -> str:
-        # Toma el nombre desde los campos más comunes, o usa el ID como fallback
-        return (
-            d.get("nombre")
-            or d.get("Nombre")
-            or d.get("ejercicio")
-            or d.get("Ejercicio")
-            or doc_id
-        ).strip()
-
     try:
-        for doc in db.collection("ejercicios").stream():
-            if not doc.exists:
-                continue
-            data = doc.to_dict() or {}
-            nombre = _nombre_visible(data, doc.id)
-            if nombre:
-                ejercicios_por_nombre[nombre] = data
+        if es_admin:
+            for doc in db.collection("ejercicios").stream():
+                if not doc.exists: continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre: ejercicios_por_nombre[nombre] = data
+        else:
+            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
+                if not doc.exists: continue
+                data = doc.to_dict() or {}
+                nombre = (data.get("nombre") or "").strip()
+                if nombre: ejercicios_por_nombre[nombre] = data
+            if correo_usuario:
+                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+                    if not doc.exists: continue
+                    data = doc.to_dict() or {}
+                    nombre = (data.get("nombre") or "").strip()
+                    if nombre: ejercicios_por_nombre[nombre] = data
     except Exception as e:
         st.error(f"Error cargando ejercicios: {e}")
-
     return ejercicios_por_nombre
 
 @st.cache_data(show_spinner=False)
@@ -229,7 +327,8 @@ def _ejercicio_firestore_a_fila_ui_min(ej: dict) -> dict:
     fila["Detalle"]   = ej.get("Detalle")   or ej.get("detalle")   or ""
     fila["Series"]    = ej.get("Series")    or ej.get("series")    or ""
     fila["Peso"]      = ej.get("Peso")      or ej.get("peso")      or ""
-    fila["RIR"]       = ej.get("RIR")       or ej.get("rir")       or ""
+    fila["RirMin"] = ej.get("RirMin","") or ej.get("rir_min","") or ""
+    fila["RirMax"] = ej.get("RirMax","") or ej.get("rir_max","") or ""
     fila["Tiempo"]    = ej.get("Tiempo")    or ej.get("tiempo")    or ""
     fila["Velocidad"] = ej.get("Velocidad") or ej.get("velocidad") or ""
     fila["Tipo"]      = ej.get("Tipo")      or ej.get("tipo")      or ""
@@ -326,12 +425,6 @@ def crear_rutinas():
         return
 
     st.markdown("<h2 class='h-accent'>Crear nueva rutina</h2>", unsafe_allow_html=True)
-
-    cols_top = st.columns([5, 1])
-    with cols_top[1]:
-        if st.button("🔄", help="Recargar catálogos", type="secondary", use_container_width=True):
-            st.cache_data.clear()
-            st.rerun()
 
     # --- Tarjeta de filtros principales ---
     st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -437,10 +530,11 @@ def crear_rutinas():
     dias = dias_labels  # alias
 
     BASE_HEADERS = [
-        "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-        "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar"
+    "Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
+    "Series", "Repeticiones", "Peso", "RIR (Min/Max)", "Progresión", "Copiar", "Video?"
     ]
-    BASE_SIZES = [1, 2.0, 2.5, 2.0, 0.8, 1.6, 1.0, 0.8, 1.0, 0.8]
+    BASE_SIZES = [1, 2.5, 2.5, 2.0, 0.7, 1.4, 1.0, 1.4, 1.0, 0.6, 0.6]  
+    # 👆 aquí puse 1.6 en RIR para que quepan dos casillas
 
     columnas_tabla = [
         "Circuito", "Sección", "Ejercicio", "Detalle", "Series", "Repeticiones",
@@ -465,7 +559,9 @@ def crear_rutinas():
 
                 # --- Encabezado de sección con toggles ---
                 st.markdown("<div class='card'>", unsafe_allow_html=True)
-                head_cols = st.columns([7.6, 1.1, 1.2, 1.2], gap="small")
+                # +1 columna a la derecha para el botón "Crear ejercicio"
+                head_cols = st.columns([6.9, 1.1, 1.2, 1.2, 1.6], gap="small")
+
                 with head_cols[0]:
                     st.markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
                 with head_cols[1]:
@@ -486,12 +582,205 @@ def crear_rutinas():
                         key=f"show_desc_{key_seccion}",
                         value=st.session_state.get(f"show_desc_{key_seccion}", False),
                     )
+                
+                # --- Botón/Popover: "＋" Crear ejercicio (encabezado de sección) con permisos ---
+                if _tiene_permiso_agregar():
+                    pop = head_cols[4].popover("＋", use_container_width=True)  # ← sin key (tu Streamlit no lo soporta)
+                    with pop:
+                        st.markdown("**📌 Crear o Editar Ejercicio (rápido)**")
+
+                        # === Catálogos (mismos que admin) ===
+                        try:
+                            cat = get_catalogos()
+                        except Exception as e:
+                            st.error(f"No pude cargar catálogos: {e}")
+                            cat = {}
+                        catalogo_carac   = cat.get("caracteristicas", []) or []
+                        catalogo_patron  = cat.get("patrones_movimiento", []) or []
+                        catalogo_grupo_p = cat.get("grupo_muscular_principal", []) or []
+                        catalogo_grupo_s = cat.get("grupo_muscular_secundario", []) or []
+
+                        # === Select con opción “➕ Agregar nuevo …”
+                        def _combo_con_agregar(label: str, opciones: list[str], key_base: str, valor_inicial: str = "") -> str:
+                            SENT = "➕ Agregar nuevo…"
+                            base_opts = sorted(opciones or [])
+                            if valor_inicial and valor_inicial not in base_opts:
+                                base_opts.append(valor_inicial)
+                            opts = ["— Selecciona —"] + base_opts + [SENT]
+                            index_default = 0
+                            if valor_inicial:
+                                try:
+                                    index_default = opts.index(valor_inicial)
+                                except ValueError:
+                                    index_default = 0
+
+                            sel = st.selectbox(label, opts, index=index_default, key=f"{key_base}_sel_{key_seccion}")
+                            if sel == SENT:
+                                st.markdown("<div class='card'>", unsafe_allow_html=True)
+                                nuevo = st.text_input(f"Ingresar nuevo valor para {label.lower()}:", key=f"{key_base}_nuevo_{key_seccion}")
+                                cols_add = st.columns([1, 1, 6])
+                                with cols_add[0]:
+                                    if st.button("Guardar", key=f"{key_base}_guardar_{key_seccion}", type="primary"):
+                                        valor_limpio = (nuevo or "").strip()
+                                        if valor_limpio:
+                                            t = label.lower()
+                                            if "característica" in t or "caracteristica" in t:
+                                                tipo = "caracteristicas"
+                                            elif "patrón" in t or "patron" in t:
+                                                tipo = "patrones_movimiento"
+                                            elif "grupo muscular secundario" in t:
+                                                tipo = "grupo_muscular_secundario"
+                                            elif "grupo muscular principal" in t:
+                                                tipo = "grupo_muscular_principal"
+                                            else:
+                                                tipo = "otros_catalogos"
+                                            add_item(tipo, valor_limpio)
+                                            st.success(f"Agregado: {valor_limpio}")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                st.markdown("</div>", unsafe_allow_html=True)
+                                return ""
+                            elif sel == "— Selecciona —":
+                                return ""
+                            else:
+                                return sel
+
+                        # === Prefill con la última búsqueda de ESTA sección ===
+                        _prefill_detalle = ""
+                        _prefix_busca = f"buscar_{i}_{seccion.replace(' ','_')}_"
+                        try:
+                            for kss, vss in st.session_state.items():
+                                if isinstance(vss, str) and kss.startswith(_prefix_busca) and vss.strip():
+                                    _prefill_detalle = vss.strip()
+                                    break
+                        except Exception:
+                            pass
+
+                        # === FORMULARIO (igual que admin) ===
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            marca = st.text_input("Marca (opcional):", key=f"marca_top_{key_seccion}").strip()
+                        with c2:
+                            maquina = st.text_input("Máquina (opcional):", key=f"maquina_top_{key_seccion}").strip()
+
+                        detalle = st.text_input("Detalle:", value=_prefill_detalle, key=f"detalle_top_{key_seccion}")
+
+                        c3, c4 = st.columns(2)
+                        with c3:
+                            caracteristica = _combo_con_agregar("Característica",        catalogo_carac,   key_base=f"carac_top_{i}_{seccion}")
+                        with c4:
+                            patron         = _combo_con_agregar("Patrón de Movimiento",  catalogo_patron,  key_base=f"patron_top_{i}_{seccion}")
+
+                        c5, c6 = st.columns(2)
+                        with c5:
+                            grupo_p        = _combo_con_agregar("Grupo Muscular Principal",  catalogo_grupo_p, key_base=f"grupoP_top_{i}_{seccion}")
+                        with c6:
+                            grupo_s        = _combo_con_agregar("Grupo Muscular Secundario", catalogo_grupo_s, key_base=f"grupoS_top_{i}_{seccion}")
+
+                        # Link de video (opcional) — NUEVO
+                        video_url = st.text_input(
+                            "URL del video (opcional):",
+                            key=f"video_top_{key_seccion}",
+                            placeholder="https://youtu.be/…"
+                        )
+
+                        # Preview de implemento/pesos si hay Marca + Máquina
+                        id_impl_preview = ""
+                        if marca and maquina:
+                            try:
+                                # usa tu helper si lo tienes; si no, pega el helper del bloque 2
+                                id_impl_preview = _resolver_id_implemento(marca, maquina)
+                                if id_impl_preview:
+                                    snap_impl = get_db().collection("implementos").document(str(id_impl_preview)).get()
+                                    if snap_impl.exists:
+                                        data_impl = snap_impl.to_dict() or {}
+                                        st.success(f"Implemento detectado: ID **{id_impl_preview}** · {data_impl.get('marca','')} – {data_impl.get('maquina','')}")
+                                        pesos = data_impl.get("pesos", [])
+                                        if isinstance(pesos, dict):
+                                            pesos_list = [v for _, v in sorted(pesos.items(), key=lambda kv: int(kv[0]))]
+                                        elif isinstance(pesos, list):
+                                            pesos_list = pesos
+                                        else:
+                                            pesos_list = []
+                                        if pesos_list:
+                                            st.caption("Pesos disponibles (preview): " + ", ".join(str(p) for p in pesos_list))
+                            except Exception:
+                                pass
+
+                        # Nombre compuesto (solo lectura)
+                        nombre_ej = " ".join([x for x in [marca, maquina, detalle] if x]).strip()
+                        st.text_input("Nombre completo del ejercicio:", value=nombre_ej, key=f"nombre_top_{key_seccion}", disabled=True)
+
+                        publico_default = True if es_admin() else False
+                        publico_check   = st.checkbox("Hacer público (visible para todos los entrenadores)", value=publico_default, key=f"pub_chk_{key_seccion}")
+
+                        # Guardar
+                        cols_btn_save = st.columns([1,3])
+                        with cols_btn_save[0]:
+                            if st.button("💾 Guardar Ejercicio", key=f"btn_guardar_top_{key_seccion}", type="primary", use_container_width=True):
+                                faltantes = [etq for etq, val in {
+                                    "Característica": caracteristica,
+                                    "Patrón de Movimiento": patron,
+                                    "Grupo Muscular Principal": grupo_p
+                                }.items() if not (val or "").strip()]
+                                if faltantes:
+                                    st.warning("⚠️ Completa: " + ", ".join(faltantes))
+                                else:
+                                    nombre_final = (nombre_ej or detalle or maquina or marca or "").strip()
+                                    if not nombre_final:
+                                        st.warning("⚠️ El campo 'nombre' es obligatorio (usa al menos Detalle/Máquina/Marca).")
+                                    else:
+                                        id_impl_final = _resolver_id_implemento(marca, maquina) if (marca and maquina) else ""
+
+                                        payload = {
+                                            "nombre": nombre_final,
+                                            "marca":  marca,
+                                            "maquina": maquina,
+                                            "detalle": detalle,
+                                            "caracteristica": caracteristica,
+                                            "patron_de_movimiento": patron,
+                                            "grupo_muscular_principal":  grupo_p,
+                                            "grupo_muscular_secundario": grupo_s or "",
+                                            "id_implemento": id_impl_final,
+                                            "video": (video_url or "").strip(),          # ← guarda el link de video
+                                            "publico_flag": bool(publico_check),
+                                        }
+                                        try:
+                                            guardar_ejercicio_firestore(nombre_final, payload)
+
+                                            # refresca cache local para búsquedas/pesos/video inmediato
+                                            ejercicios_dict[nombre_final] = {
+                                                "nombre": nombre_final,
+                                                "marca":  marca,
+                                                "maquina": maquina,
+                                                "detalle": detalle,
+                                                "caracteristica": caracteristica,
+                                                "patron_de_movimiento": patron,
+                                                "grupo_muscular_principal":  grupo_p,
+                                                "grupo_muscular_secundario": grupo_s or "",
+                                                "id_implemento": id_impl_final if id_impl_final else "",
+                                                "publico": bool(publico_check),
+                                                "video": (video_url or "").strip(),
+                                            }
+                                            st.success(f"✅ Ejercicio '{nombre_final}' guardado correctamente")
+                                            st.cache_data.clear()
+                                            st.rerun()
+                                        except Exception as e:
+                                            st.error(f"❌ Error al guardar: {e}")
+                else:
+                    head_cols[4].button("＋", use_container_width=True, disabled=True)
+                    st.caption("Solo *Administrador* o *Entrenador* pueden crear ejercicios.")
 
                 # ======= Construcción dinámica de columnas =======
                 headers = BASE_HEADERS.copy()
                 sizes = BASE_SIZES.copy()
 
-                rir_idx = headers.index("RIR")
+                # antes
+                # rir_idx = headers.index("RIR")
+
+                # después
+                rir_idx = headers.index("RIR (Min/Max)")
+
 
                 if show_tiempo_sec:
                     headers.insert(rir_idx, "Tiempo")
@@ -540,67 +829,66 @@ def crear_rutinas():
                             label_visibility="collapsed"
                         )
 
-                        # Buscar + Ejercicio
-                        if seccion == "Work Out":
-                            # === Buscar + Ejercicio (modo exacto al cargar, luego fuzzy) ===
-                            palabra = cols[pos["Buscar Ejercicio"]].text_input(
-                                "", value=fila.get("BuscarEjercicio", ""),
-                                key=f"buscar_{key_entrenamiento}", label_visibility="collapsed", placeholder="Buscar…"
-                            )
-                            fila["BuscarEjercicio"] = palabra
+                        # =======================
+                        # Buscar + Ejercicio (INLINE con alta si no existe)
+                        # =======================
+                        # --- Buscador de ejercicios (Warm Up y Work Out)
+                        palabra = cols[pos["Buscar Ejercicio"]].text_input(
+                            "", value=fila.get("BuscarEjercicio", ""),
+                            key=f"buscar_{key_entrenamiento}",
+                            label_visibility="collapsed", placeholder="Buscar ejercicio…"
+                        )
+                        fila["BuscarEjercicio"] = palabra
 
-                            nombre_original = (fila.get("Ejercicio","") or "").strip()
-                            exact_on_load = bool(fila.get("_exact_on_load", False))
+                        nombre_original = (fila.get("Ejercicio","") or "").strip()
+                        exact_on_load = bool(fila.get("_exact_on_load", False))
 
-                            def _buscar_fuzzy_local(q: str) -> list[str]:
-                                if not q.strip():
-                                    return []
-                                tokens = normalizar_texto(q).split()
-                                res = []
-                                for n in ejercicios_dict.keys():
-                                    nn = normalizar_texto(n)
-                                    if all(t in nn for t in tokens):
-                                        res.append(n)
-                                return res
+                        def _buscar_fuzzy_local(q: str) -> list[str]:
+                            if not q.strip():
+                                return []
+                            tokens = normalizar_texto(q).split()
+                            res = []
+                            for n in ejercicios_dict.keys():
+                                nn = normalizar_texto(n)
+                                if all(t in nn for t in tokens):
+                                    res.append(n)
+                            return res
 
-                            # Construye lista de opciones
-                            if exact_on_load:
-                                # Si no escribiste nada o escribiste exactamente el original -> lista exacta
-                                if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
-                                    ejercicios_encontrados = [nombre_original] if nombre_original else []
-                                else:
-                                    # El usuario cambió la búsqueda -> pasa a fuzzy y desactiva exact_on_load
-                                    ejercicios_encontrados = _buscar_fuzzy_local(palabra)
-                                    fila["_exact_on_load"] = False
+                        if exact_on_load:
+                            if (not palabra.strip()) or (normalizar_texto(palabra) == normalizar_texto(nombre_original)):
+                                ejercicios_encontrados = [nombre_original] if nombre_original else []
                             else:
                                 ejercicios_encontrados = _buscar_fuzzy_local(palabra)
-
-                            # Fallback: si no hay resultados y tenemos un original, mantenlo como única opción
-                            if not ejercicios_encontrados and nombre_original:
-                                ejercicios_encontrados = [nombre_original]
-
-                            # Quita duplicados preservando orden
-                            vistos = set()
-                            ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
-
-                            seleccionado = cols[pos["Ejercicio"]].selectbox(
-                                "",
-                                ejercicios_encontrados if ejercicios_encontrados else ["(sin resultados)"],
-                                key=f"select_{key_entrenamiento}",
-                                label_visibility="collapsed"
-                            )
-                            if seleccionado != "(sin resultados)":
-                                fila["Ejercicio"] = seleccionado
-                                fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
-
+                                fila["_exact_on_load"] = False
                         else:
-                            # Warm Up: sin buscador, nombre libre
-                            cols[pos["Buscar Ejercicio"]].markdown("&nbsp;", unsafe_allow_html=True)
-                            fila["Ejercicio"] = cols[pos["Ejercicio"]].text_input(
-                                "", value=fila.get("Ejercicio",""),
-                                key=f"ej_{key_entrenamiento}", label_visibility="collapsed", placeholder="Nombre del ejercicio"
-                            )
+                            ejercicios_encontrados = _buscar_fuzzy_local(palabra)
 
+                        if not ejercicios_encontrados and nombre_original:
+                            ejercicios_encontrados = [nombre_original]
+
+                        vistos = set()
+                        ejercicios_encontrados = [e for e in ejercicios_encontrados if not (e in vistos or vistos.add(e))]
+
+                        if not ejercicios_encontrados and palabra.strip():
+                            ejercicios_encontrados = [palabra.strip()]
+                        elif not ejercicios_encontrados:
+                            ejercicios_encontrados = ["(sin resultados)"]
+
+                        seleccionado = cols[pos["Ejercicio"]].selectbox(
+                            "",
+                            ejercicios_encontrados,
+                            key=f"select_{key_entrenamiento}",
+                            label_visibility="collapsed"
+                        )
+
+                        if seleccionado == "(sin resultados)":
+                            fila["Ejercicio"] = palabra.strip()
+                            fila["Video"] = (ejercicios_dict.get(fila["Ejercicio"], {}) or {}).get("video", "").strip()
+                        else:
+                            fila["Ejercicio"] = seleccionado
+                            fila["Video"] = (ejercicios_dict.get(seleccionado, {}) or {}).get("video", "").strip()
+                        
+                        
                         # Detalle
                         fila["Detalle"] = cols[pos["Detalle"]].text_input(
                             "", value=fila.get("Detalle",""),
@@ -694,10 +982,16 @@ def crear_rutinas():
                             fila.setdefault("Descanso","")
 
                         # RIR
-                        fila["RIR"] = cols[pos["RIR"]].text_input(
-                            "", value=fila.get("RIR",""),
-                            key=f"rir_{key_entrenamiento}", label_visibility="collapsed", placeholder="RIR"
+                        cmin_rir, cmax_rir = cols[pos["RIR (Min/Max)"]].columns(2)
+                        fila["RirMin"] = cmin_rir.text_input(
+                            "", value=str(fila.get("RirMin","")),
+                            key=f"rirmin_{key_entrenamiento}", label_visibility="collapsed", placeholder="Min"
                         )
+                        fila["RirMax"] = cmax_rir.text_input(
+                            "", value=str(fila.get("RirMax","")),
+                            key=f"rirmax_{key_entrenamiento}", label_visibility="collapsed", placeholder="Max"
+                        )
+
 
                         # Progresiones
                         prog_cell = cols[pos["Progresión"]].columns([1, 1, 1])
@@ -705,6 +999,22 @@ def crear_rutinas():
 
                         copy_cell = cols[pos["Copiar"]].columns([1, 1, 1])
                         mostrar_copia = copy_cell[1].checkbox("", key=f"copy_check_{key_entrenamiento}_{idx}")
+
+                        # ===== Indicador de Video (✅ / ❌) al final =====
+                        # ===== Indicador de Video (checkbox deshabilitado) =====
+                        # esto va dentro del loop de filas, DESPUÉS de actualizar fila["Ejercicio"] / fila["Video"]
+                        if "Video?" in pos:   # 👈 nombre EXACTO del header
+                            nombre_ej = str(fila.get("Ejercicio", "")).strip()
+                            has_video = bool((fila.get("Video") or "").strip()) or tiene_video(nombre_ej, ejercicios_dict)
+
+                            cols[pos["Video?"]].checkbox(
+                                "",
+                                value=has_video,
+                                key=f"video_flag_{i}_{seccion}_{idx}",   # 👈 key 100% única
+                                disabled=True
+                            )
+
+
 
                         if mostrar_progresion:
                             st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
@@ -751,8 +1061,38 @@ def crear_rutinas():
                             st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
                             st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
 
-                    submitted = st.form_submit_button("Actualizar sección", type="primary")
+                    action_cols = st.columns([1,5,1], gap="small")
+                    with action_cols[0]:
+                        submitted = st.form_submit_button("Actualizar sección", type="primary")
+                    with action_cols[2]:
+                        limpiar_clicked = st.form_submit_button("Limpiar sección", type="secondary")
+
+                    pending_key = f"pending_clear_{key_seccion}"
+
+                    if limpiar_clicked:
+                        if st.session_state.get(pending_key):
+                            fila_vacia = {k: "" for k in columnas_tabla}
+                            fila_vacia["Sección"] = seccion
+                            fila_vacia["Circuito"] = clamp_circuito_por_seccion(fila_vacia.get("Circuito","") or "", seccion)
+                            fila_vacia["BuscarEjercicio"] = ""
+                            fila_vacia["Ejercicio"] = ""
+                            st.session_state[key_seccion] = [fila_vacia]
+
+                            prefix = f"{i}_{seccion.replace(' ','_')}_"
+                            for key in list(st.session_state.keys()):
+                                if key.startswith(f"multiselect_{prefix}") or key.startswith(f"do_copy_{prefix}"):
+                                    st.session_state.pop(key, None)
+                            st.session_state.pop(pending_key, None)
+                            st.success("Sección limpiada ✅")
+                            st.rerun()
+                        else:
+                            st.session_state[pending_key] = True
+
+                    if st.session_state.get(pending_key):
+                        st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
+
                     if submitted:
+                        st.session_state.pop(pending_key, None)
                         # Normalización final de circuitos y copia
                         for idx, fila in enumerate(st.session_state[key_seccion]):
                             # Clamp circuito según sección por si entró algo viejo en session_state
@@ -785,8 +1125,9 @@ def crear_rutinas():
 
             st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
 
-    # ======= Sidebar de análisis =======
-    with st.sidebar:
+    # ======= Panel de análisis =======
+    analysis_controls = st.container()
+    with analysis_controls:
         st.markdown("<div class='sidebar-card'>", unsafe_allow_html=True)
         st.markdown("### 🧮 Series por categoría")
         opcion_categoria = st.selectbox("Categoría para análisis:", ["grupo_muscular_principal", "patron_de_movimiento"])
@@ -826,7 +1167,8 @@ def crear_rutinas():
                 contador[categoria_norm] = series
                 nombres_originales[categoria_norm] = {categoria_valor}
 
-    with st.sidebar:
+    analysis_results = st.container()
+    with analysis_results:
         st.markdown("<div class='sidebar-card'>", unsafe_allow_html=True)
         if contador:
             df = pd.DataFrame({
@@ -902,7 +1244,15 @@ def crear_rutinas():
                             rep_str = f"{mn}–{mx}"
                         elif mn != "" or mx != "":
                             rep_str = str(mn or mx)
+                        
+                        rir_str = ""
+                        mn_rir, mx_rir = ejv.get("RirMin",""), ejv.get("RirMax","")
+                        if mn_rir != "" and mx_rir != "":
+                            rir_str = f"{mn_rir}–{mx_rir}"
+                        elif mn_rir != "" or mx_rir != "":
+                            rir_str = str(mn_rir or mx_rir)
 
+                    
                         # El bloque se respeta por "Sección" y circuitos ya están validados por sección
                         tabla.append({
                             "bloque": ejv.get("Sección") or ("Warm Up" if ejv.get("Circuito","") in ["A","B","C"] else "Work Out"),
@@ -914,7 +1264,7 @@ def crear_rutinas():
                             "tiempo": ejv.get("Tiempo",""),
                             "velocidad": ejv.get("Velocidad",""),
                             "descanso": ejv.get("Descanso",""),
-                            "rir": ejv.get("RIR",""),
+                            "rir": rir_str,
                             "tipo": ejv.get("Tipo",""),
                         })
 
@@ -935,4 +1285,3 @@ def crear_rutinas():
             )
         else:
             st.warning("⚠️ Completa nombre, correo y entrenador antes de guardar.")
-

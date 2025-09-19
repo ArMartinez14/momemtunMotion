@@ -2,115 +2,164 @@
 from __future__ import annotations
 
 import streamlit as st
-import firebase_admin
-from firebase_admin import credentials, firestore
+from firebase_admin import firestore
 from datetime import datetime, timedelta, date
 import json, random, re
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
-from soft_login_full import soft_login_barrier
-soft_login_full = soft_login_barrier(required_roles=["entrenador", "deportista", "admin"])
+from app_core.firebase_client import get_db
+from app_core.theme import inject_theme
 
 # ==========================
 #  PALETA / ESTILOS con soporte claro/oscuro
 # ==========================
-import streamlit as st
+control_bar = st.container()
+with control_bar:
+    control_cols = st.columns([4, 1])
+    with control_cols[1]:
+        theme_mode = st.selectbox(
+            "🎨 Tema",
+            ["Auto", "Oscuro", "Claro"],
+            key="theme_mode_vista_rutinas",
+            help="'Auto' sigue el modo del sistema; 'Oscuro/Claro' fuerzan los colores.",
+            label_visibility="collapsed",
+        )
 
-# Paleta modo oscuro (la tuya actual, con terracota)
-DARK = dict(
-    PRIMARY   ="#00C2FF",
-    SUCCESS   ="#22C55E",
-    WARNING   ="#F59E0B",
-    DANGER    ="#E2725B",   # ← rojo terracota
-    BG        ="#0B0F14",
-    SURFACE   ="#121821",
-    TEXT_MAIN ="#FFFFFF",
-    TEXT_MUTED="#94A3B8",
-    STROKE    ="rgba(255,255,255,.08)",
-)
-
-# Paleta modo claro (también con terracota)
-LIGHT = dict(
-    PRIMARY   ="#0077FF",
-    SUCCESS   ="#16A34A",
-    WARNING   ="#D97706",
-    DANGER    ="#E2725B",   # ← rojo terracota
-    BG        ="#FFFFFF",
-    SURFACE   ="#F8FAFC",   
-    TEXT_MAIN ="#0F172A",   
-    TEXT_MUTED="#475569",   
-    STROKE    ="rgba(2,6,23,.08)",  
-)
-
-
-with st.sidebar:
-    theme_mode = st.selectbox(
-        "🎨 Tema", ["Auto", "Oscuro", "Claro"],
-        key="theme_mode_vista_rutinas",  # 👈 otra clave única
-        help="‘Auto’ sigue el modo del sistema; ‘Oscuro/Claro’ fuerzan los colores."
-    )
-
-def _vars_block(p):
-    return f"""
-    --primary:{p['PRIMARY']}; --success:{p['SUCCESS']}; --warning:{p['WARNING']}; --danger:{p['DANGER']};
-    --bg:{p['BG']}; --surface:{p['SURFACE']}; --muted:{p['TEXT_MUTED']}; --stroke:{p['STROKE']};
-    --text-main:{p['TEXT_MAIN']};
+st.markdown(
     """
+    <style>
+    .status-card {
+        background: #0b1018;
+        border: 1px solid rgba(15, 23, 42, 0.7);
+        border-radius: 18px;
+        padding: 20px 22px;
+        margin-bottom: 16px;
+        box-shadow: 0 8px 24px rgba(8, 15, 26, 0.2);
+        color: #e2e8f0;
+    }
+    .status-card__message {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        color: #e2e8f0;
+    }
+    .status-card__greet {
+        font-size: 1rem;
+        font-weight: 600;
+    }
+    .status-card__title {
+        font-size: 1.28rem;
+        font-weight: 800;
+    }
+    .status-card__label {
+        font-size: 0.72rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: rgba(148, 163, 184, 0.75);
+        display: inline-block;
+        margin-bottom: 4px;
+    }
+    .status-card__range {
+        margin-top: 12px;
+        font-size: 0.9rem;
+        font-weight: 600;
+        color: rgba(148, 163, 184, 0.75);
+    }
+    .summary-card {
+        background: linear-gradient(135deg, rgba(52, 211, 153, 0.18), rgba(16, 185, 129, 0.22));
+        border: 1px solid rgba(16, 185, 129, 0.45);
+        border-radius: 16px;
+        padding: 16px 20px;
+        margin: 10px 0 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        box-shadow: 0 12px 36px rgba(16, 185, 129, 0.25);
+        color: #052019;
+    }
+    .summary-card__title {
+        font-weight: 800;
+        font-size: 1.05rem;
+        color: #052019;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    .summary-card__meta {
+        font-size: 0.96rem;
+        color: #064e3b;
+    }
+    .summary-card__meta.muted {
+        color: rgba(6, 78, 59, 0.7);
+    }
+    .days-subtitle {
+        margin: 18px 0 12px;
+        font-size: 0.92rem;
+        font-weight: 600;
+        color: rgba(14, 165, 233, 0.8);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    div[data-testid="stButton"][data-key^="daybtn_"] button {
+        width: 100%;
+        border-radius: 14px;
+        padding: 14px 16px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        white-space: pre-line;
+        box-shadow: 0 8px 24px rgba(56, 189, 248, 0.18);
+    }
+    div[data-testid="stButton"][data-key^="daybtn_"] button[kind="secondary"] {
+        background: linear-gradient(135deg, rgba(23, 37, 84, 0.85), rgba(30, 64, 175, 0.85)) !important;
+        color: #f8fafc !important;
+    }
+    div[data-testid="stButton"][data-key^="daybtn_"] button[kind="primary"] {
+        background: linear-gradient(135deg, rgba(239, 68, 68, 0.9), rgba(244, 114, 182, 0.85)) !important;
+        color: #fff5f5 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-# CSS: define ambas paletas + sobrescritura según sistema + override manual
-_css = f"""
-<style>
-/* Defaults (usaremos LIGHT por accesibilidad si no hay media query) */
-:root {{ {_vars_block(LIGHT)} }}
+# CSS/tema unificado
+inject_theme()
+def _rirstr(e: dict) -> str:
+    """
+    Devuelve el RIR en formato:
+      - "min–max" si existen campos de rango (RirMin/RirMax o rir_min/rir_max)
+      - valor único si solo hay uno de ellos
+      - valor 'legacy' si viene como texto único en e['rir'] / e['RIR'] / e['Rir']
+      - "" si no hay datos
+    """
+    # 1) Nuevos campos con rango
+    rmin = e.get("RirMin") or e.get("rir_min") or e.get("RIR_min")
+    rmax = e.get("RirMax") or e.get("rir_max") or e.get("RIR_max")
 
-/* Modo oscuro automático por preferencia del sistema */
-@media (prefers-color-scheme: dark) {{
-  :root {{ {_vars_block(DARK)} }}
-}}
+    rmin_s = str(rmin).strip() if rmin not in (None, "") else ""
+    rmax_s = str(rmax).strip() if rmax not in (None, "") else ""
 
-/* Estilos base que usan variables */
-html,body,[data-testid="stAppViewContainer"]{{ background:var(--bg)!important; color:var(--text-main)!important; }}
-h1,h2,h3,h4, label, p, span, div{{ color:var(--text-main); }}
-.muted {{ color:var(--muted); font-size:12px; }}
-.hr-light {{ border-bottom:1px solid var(--stroke); margin:12px 0; }}
-.card {{ background:var(--surface); border:1px solid var(--stroke); border-radius:12px; padding:12px 14px; }}
-.h-accent {{ position:relative; padding-left:10px; margin:8px 0 6px; font-weight:700; color:var(--text-main); }}
-.h-accent:before {{ content:""; position:absolute; left:0; top:2px; bottom:2px; width:4px; border-radius:3px; background:var(--primary); }}
+    if rmin_s and rmax_s:
+        return f"{rmin_s}–{rmax_s}"
+    if rmin_s or rmax_s:
+        return rmin_s or rmax_s
 
-/* Badges */
-.badge {{ display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; font-weight:700; }}
-.badge--success {{ background:var(--success); color:#06210c; }}
-.badge--pending {{ background:rgba(0,194,255,.15); color:#055160; border:1px solid rgba(0,194,255,.25); }}
+    # 2) Formato antiguo: un solo campo de texto/numero
+    legacy = e.get("rir") or e.get("RIR") or e.get("Rir") or ""
+    legacy_s = str(legacy).strip()
+    if not legacy_s:
+        return ""
 
-/* Botones */
-div.stButton > button[kind="primary"], .stDownloadButton button {{
-  background: var(--primary) !important; color:#001018 !important; border:none !important;
-  font-weight:700 !important; border-radius:10px !important;
-}}
-div.stButton > button[kind="secondary"] {{
-  background: var(--surface) !important; color: var(--text-main) !important; border:1px solid var(--stroke) !important;
-  border-radius:10px !important;
-}}
-div.stButton > button:hover {{ filter:brightness(0.93); }}
+    # Si venía "RIR 2" o "2 RIR", extrae número; si no, deja el texto
+    m = re.search(r"-?\d+(\.\d+)?", legacy_s)
+    return m.group(0) if m else legacy_s
 
-/* Inputs / selects */
-[data-baseweb="input"] input, .stTextInput input, .stSelectbox div, .stSlider, textarea{{
-  color:var(--text-main)!important;
-}}
-/* Sticky CTA */
-.sticky-cta {{ position:sticky; bottom:0; z-index:10; padding-top:8px;
-  background:linear-gradient(180deg, rgba(0,0,0,0), rgba(0,0,0,.06)); backdrop-filter: blur(6px); }}
-</style>
-"""
 
-# Override manual si el usuario lo fuerza
-if theme_mode == "Oscuro":
-    _css += f"<style>:root{{ {_vars_block(DARK)} }}</style>"
-elif theme_mode == "Claro":
-    _css += f"<style>:root{{ {_vars_block(LIGHT)} }}</style>"
-
-st.markdown(_css, unsafe_allow_html=True)
 
 # ==========================
 #  MOTIVACIONAL
@@ -459,11 +508,7 @@ def generar_tarjeta_resumen_sesion(nombre, dia_indice, ejercicios_workout, focus
 # ==========================
 def ver_rutinas():
     # Firebase init
-    if not firebase_admin._apps:
-        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
-        cred = credentials.Certificate(cred_dict)
-        firebase_admin.initialize_app(cred)
-    db = firestore.client()
+    db = get_db()
 
     def normalizar_correo(c): return c.strip().lower().replace("@","_").replace(".","_")
     def obtener_fecha_lunes():
@@ -484,10 +529,13 @@ def ver_rutinas():
     datos_usuario = doc_user.to_dict()
     nombre = datos_usuario.get("nombre","Usuario")
     rol = (st.session_state.get("rol") or datos_usuario.get("rol","desconocido")).strip().lower()
+    es_staff = rol in {"entrenador", "admin"}
 
-    # Sidebar saludo
-    with st.sidebar:
-        st.markdown(f"<div class='card'><b>Bienvenido {nombre.split(' ')[0]}</b></div>", unsafe_allow_html=True)
+    # Saludo en cabecera
+    st.markdown(
+        f"<div class='card status-card' style='margin:8px 0; padding:12px;'><b>Bienvenido {nombre.split(' ')[0]}</b></div>",
+        unsafe_allow_html=True,
+    )
 
     # Cargar todas y filtrar por cliente según rol
     rutinas_all = cargar_todas_las_rutinas()
@@ -495,22 +543,91 @@ def ver_rutinas():
 
     cliente_sel = None
     if es_entrenador(rol):
-        clientes = sorted({r.get("cliente","") for r in rutinas_all if r.get("cliente")})
-        prev_cliente = st.session_state.get("_cliente_sel")
-        # Botón pequeño alineado a la derecha (actualizar lista)
-        col_void, col_btn = st.columns([6, 1], gap="small")
-        with col_btn:
-            if st.button("🔄", key="refresh_clientes", type="secondary", help="Actualizar rutina"):
-                st.cache_data.clear()
+        clientes = sorted({(r.get("cliente") or "").strip() for r in rutinas_all if r.get("cliente")})
+        if not clientes:
+            st.info("No hay clientes registrados aún."); st.stop()
+
+        busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
+        busqueda_lower = busqueda.lower()
+
+        rol_lower = rol.strip().lower()
+        correos_entrenador = {correo_raw, correo_norm, normalizar_correo(correo_raw)}
+        clientes_asignados = sorted({
+            (r.get("cliente") or "").strip()
+            for r in rutinas_all
+            if r.get("cliente") and ((r.get("entrenador") or "").strip().lower() in correos_entrenador
+                                       or normalizar_correo(r.get("entrenador") or "") in correos_entrenador)
+        })
+
+        base_lista = clientes
+        if rol_lower in {"entrenador", "admin", "administrador"}:
+            base_lista = clientes_asignados
+
+        if busqueda_lower:
+            candidatos = [c for c in clientes if busqueda_lower in c.lower()]
+        else:
+            candidatos = base_lista
+
+        if "_mostrar_lista_clientes" not in st.session_state:
+            st.session_state["_mostrar_lista_clientes"] = True
+
+        if st.session_state.get("_cliente_sel") not in clientes:
+            st.session_state.pop("_cliente_sel", None)
+            st.session_state["_mostrar_lista_clientes"] = True
+
+        if busqueda:
+            st.session_state["_mostrar_lista_clientes"] = True
+
+        mostrar_lista = st.session_state.get("_mostrar_lista_clientes", True)
+        cliente_sel = st.session_state.get("_cliente_sel")
+
+        if mostrar_lista or not cliente_sel:
+            if not candidatos:
+                mensaje_sin_resultados = (
+                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if rol_lower in {"entrenador", "admin", "administrador"} and not busqueda_lower
+                    else "No se encontraron coincidencias para esa búsqueda."
+                )
+                st.info(mensaje_sin_resultados)
+            else:
+                grid_cols = st.columns(min(3, len(candidatos)))
+                for idx, cliente_nombre in enumerate(candidatos):
+                    col = grid_cols[idx % len(grid_cols)]
+                    with col:
+                        activo = cliente_nombre == cliente_sel
+                        estilo = "border: 1.5px solid var(--primary);" if activo else "border: 1px solid var(--stroke);"
+                        st.markdown(
+                            f"""
+                            <div class='card' style='{estilo} padding:14px; display:flex; flex-direction:column; gap:6px;'>
+                              <div style='font-weight:700; font-size:1.05rem;'>{cliente_nombre}</div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                        if st.button("Ver rutina", key=f"cliente_card_{cliente_nombre}", use_container_width=True, type="secondary"):
+                            st.session_state["_cliente_sel"] = cliente_nombre
+                            st.session_state["_mostrar_lista_clientes"] = False
+                            st.session_state.pop("semana_sel", None)
+                            st.session_state.pop("dia_sel", None)
+                            st.rerun()
+        else:
+            st.markdown(
+                f"""
+                <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
+                  <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
+                st.session_state["_mostrar_lista_clientes"] = True
+                st.session_state.pop("dia_sel", None)
                 st.rerun()
 
-        cliente_input = st.text_input("👤 Escribe el nombre del cliente:", key="cliente_input")
-        candidatos = [c for c in clientes if cliente_input.lower() in c.lower()] or clientes
-        cliente_sel = st.selectbox("Selecciona cliente:", candidatos, key="cliente_sel_ui")
-        if prev_cliente != cliente_sel:
-            st.session_state["_cliente_sel"] = cliente_sel
-            st.session_state.pop("semana_sel", None)
-            st.session_state.pop("dia_sel", None)
+        cliente_sel = st.session_state.get("_cliente_sel")
+        if not cliente_sel:
+            st.info("Selecciona un deportista y haz clic en \"Ver rutina\" para cargar su rutina.")
+            st.stop()
+
         rutinas_cliente = [r for r in rutinas_all if r.get("cliente")==cliente_sel]
     else:
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
@@ -520,17 +637,66 @@ def ver_rutinas():
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
         st.stop()
 
+    # --- Antes de construir el selectbox de Semana, lee los query params ---
+    qp_semana = st.query_params.get("semana", [None])
+    qp_semana = qp_semana[0] if isinstance(qp_semana, list) else qp_semana
+    qp_dia    = st.query_params.get("dia", [None])
+    qp_dia    = (qp_dia[0] if isinstance(qp_dia, list) else qp_dia)
+    seeded_from_qs = False
+
     # Semana (desde rutinas_cliente)
     semanas = sorted({r["fecha_lunes"] for r in rutinas_cliente if r.get("fecha_lunes")}, reverse=True)
     semana_actual = obtener_fecha_lunes()
-    pre_semana = st.session_state.get("semana_sel")
-    index_semana = semanas.index(pre_semana) if pre_semana in semanas else (semanas.index(semana_actual) if semana_actual in semanas else 0)
-    semana_sel = st.selectbox("📆 Semana", semanas, index=index_semana, key="semana_sel")
 
-    # Reset día si cambia semana
-    if st.session_state.get("_prev_semana_sel") != semana_sel:
+    # Si viene por URL, úsala; si no, usa lo previamente seleccionado, o la actual
+    pre_semana = qp_semana or st.session_state.get("semana_sel")
+    if pre_semana not in semanas:
+        pre_semana = semana_actual if semana_actual in semanas else (semanas[0] if semanas else None)
+
+    index_semana = semanas.index(pre_semana) if pre_semana in semanas else 0
+    # ── Barra superior: mensaje + semana + refrescar ─────────────────────────────
+    status_card = st.container()
+    motivacional_msg = None
+    with status_card:
+        st.markdown("<div class='status-card'>", unsafe_allow_html=True)
+        msg_cols = st.columns([4, 1], gap="medium")
+        with msg_cols[0]:
+            bloques_status = ["<div class='status-card__message'>"]
+            if not es_staff:
+                motivacional_msg = mensaje_motivador_del_dia(nombre, correo_norm)
+                bloques_status.append(f"<div class='status-card__greet'>{motivacional_msg}</div>")
+            bloques_status.append("<div class='status-card__title'>Planifica tu semana de entrenamiento</div>")
+            bloques_status.append("</div>")
+            st.markdown("".join(bloques_status), unsafe_allow_html=True)
+        with msg_cols[1]:
+            st.markdown("<span class='status-card__label'>Semana actual</span>", unsafe_allow_html=True)
+            semana_sel = st.selectbox(
+                "Semana",
+                semanas,
+                index=index_semana,
+                key="semana_sel",
+                label_visibility="collapsed",
+            )
+        try:
+            week_start = datetime.strptime(semana_sel, "%Y-%m-%d").date()
+            week_end = week_start + timedelta(days=6)
+            rango_texto = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
+        except Exception:
+            rango_texto = "Semana sin rango definido"
+        st.markdown(f"<div class='status-card__range'>{rango_texto}</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Si venimos por query param la primera vez, SEMBRAMOS el día y marcamos bandera
+    if qp_semana and qp_dia and "dia_sel" not in st.session_state:
+        st.session_state["dia_sel"] = str(qp_dia)
+        seeded_from_qs = True
+
+    # Reset día solo si el usuario CAMBIA la semana manualmente (no al seed inicial)
+    _prev = st.session_state.get("_prev_semana_sel")
+    if _prev != semana_sel:
         st.session_state["_prev_semana_sel"] = semana_sel
-        st.session_state.pop("dia_sel", None)
+        if not seeded_from_qs:  # ← evita borrar el día que vino desde Inicio / URL
+            st.session_state.pop("dia_sel", None)
 
     # Documento de rutina (cliente + semana)
     if es_entrenador(rol):
@@ -545,61 +711,110 @@ def ver_rutinas():
     # Banner motivacional (solo deportista) con racha de SEMANAS
     if rol == "deportista":
         racha_actual = _calcular_racha_dias(rutinas_cliente, semana_sel)
-        msg = mensaje_motivador_del_dia(nombre, correo_norm)
         extra = (
             f"Llevas {racha_actual} semana{'s' if racha_actual!=1 else ''} seguidas COMPLETAS. ¡No rompas la cadena! 🔥"
             if racha_actual > 0 else None
         )
-        st.markdown(f"<div class='banner-mot'>{msg}</div>", unsafe_allow_html=True)
         if extra: st.caption(f"🔥 {extra}")
 
-    # Bloque rutina
+    rutina_semana = rutina_doc.get("rutina", {}) or {}
+    dias_dash = _dias_numericos(rutina_semana)
+    sesiones_completadas = sum(1 for d in dias_dash if rutina_semana.get(f"{d}_finalizado") is True)
+    total_sesiones = len(dias_dash)
+
     bloque_id = rutina_doc.get("bloque_rutina")
+    bloque_meta = "Sin identificador"
     if bloque_id:
         mismas = [r for r in rutinas_cliente if r.get("bloque_rutina")==bloque_id]
         fechas_bloque = sorted([r["fecha_lunes"] for r in mismas if r.get("fecha_lunes")])
         try:
             semana_actual_idx = fechas_bloque.index(semana_sel)+1
             total_semanas_bloque = len(fechas_bloque)
-            st.markdown(f"<div class='card'>📦 <b>Bloque de rutina:</b> Semana {semana_actual_idx} de {total_semanas_bloque}</div>", unsafe_allow_html=True)
+            bloque_meta = f"Semana {semana_actual_idx} de {total_semanas_bloque}"
         except ValueError:
-            st.info("ℹ️ Semana no encontrada en bloque de rutina.")
+            bloque_meta = "Sin identificador"
+
+    sesiones_texto = (
+        f"{sesiones_completadas}/{total_sesiones} sesiones completadas"
+        if total_sesiones else "Sin sesiones registradas"
+    )
+
+    st.markdown(
+        f"""
+        <div class='summary-card'>
+            <div class='summary-card__title'>📦 Bloque de rutina</div>
+            <div class='summary-card__meta'>{bloque_meta}</div>
+            <div class='summary-card__meta muted'>{sesiones_texto}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Si ya hay día elegido (session_state o por query param), NO mostrar las tarjetas
+    dia_actual = st.session_state.get("dia_sel") or (str(qp_dia) if qp_dia else None)
+
+    if dia_actual:
+        # Chip de día seleccionado + botón para cambiar día (sin volver a Inicio)
+        chip_cols = st.columns([2, 1], gap="small")
+        with chip_cols[0]:
+            st.markdown(
+                f"<div class='badge badge--pending' style='font-size:14px;'>Día seleccionado: <b>{dia_actual}</b></div>",
+                unsafe_allow_html=True
+            )
+        with chip_cols[1]:
+            if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary", use_container_width=True):
+                # Quitar día, mantener semana en la URL
+                st.session_state.pop("dia_sel", None)
+                st.query_params.clear()
+                st.query_params.update({"semana": semana_sel})
+                st.rerun()
+        st.markdown(
+            "<p class='days-subtitle'>Usa “Cambiar día” para volver a la lista y revisar otro entrenamiento.</p>",
+            unsafe_allow_html=True,
+        )
     else:
-        st.markdown(f"<div class='card'>📦 <b>Bloque de rutina:</b> <span class='muted'>Sin identificador</span></div>", unsafe_allow_html=True)
+        # Aún no hay día seleccionado → mostrar progreso + tarjetas
+        if dias_dash:
+            progreso_valor = sesiones_completadas/len(dias_dash)
+            progreso_texto = None if es_staff else f"{sesiones_completadas}/{len(dias_dash)} sesiones completadas"
 
-    # Dashboard de días (tarjetas)
-    st.markdown("<h3 class='h-accent'>🗓️ Elige tu día</h3>", unsafe_allow_html=True)
-    dias_dash = _dias_numericos(rutina_doc.get("rutina", {}))
+            if progreso_texto is not None:
+                st.progress(progreso_valor, text=progreso_texto)
+            else:
+                st.progress(progreso_valor)
 
-    if dias_dash:
-        completados = sum(1 for d in dias_dash if rutina_doc["rutina"].get(f"{d}_finalizado") is True)
-        st.progress(completados/len(dias_dash), text=f"{completados}/{len(dias_dash)} sesiones completadas")
+            st.markdown(
+                "<p class='days-subtitle'>Elige un día para revisar la rutina detallada.</p>",
+                unsafe_allow_html=True,
+            )
 
-        cols = st.columns(len(dias_dash), gap="small")
-        for i, dia in enumerate(dias_dash):
-            finalizado = bool(rutina_doc["rutina"].get(f"{dia}_finalizado") is True)
-            btn_label = f"{'✅' if finalizado else '⚡'} Día {dia}"
-            btn_key   = f"daybtn_{semana_sel}_{cliente_sel}_{dia}"
-            with cols[i]:
-                if st.button(btn_label, key=btn_key, type=("secondary" if finalizado else "primary"),
-                             use_container_width=True, help=("Completado" if finalizado else "Pendiente")):
-                    st.session_state["dia_sel"] = str(dia)
-                    st.rerun()
-                st.markdown(
-                    "<span class='badge {cls}'></span>".format(
-                        cls=("badge--success" if finalizado else "badge--pending"),
-                    ),
-                    unsafe_allow_html=True
-                )
+            cols = st.columns(len(dias_dash), gap="medium")
+            for i, dia in enumerate(dias_dash):
+                finalizado = bool(rutina_doc["rutina"].get(f"{dia}_finalizado") is True)
+                estado_texto = "Completado" if finalizado else "Pendiente"
+                btn_label = f"{'✅' if finalizado else '⚡'} Día {dia}\n{estado_texto}"
+                btn_key   = f"daybtn_{semana_sel}_{cliente_sel}_{dia}"
+                with cols[i]:
+                    if st.button(btn_label, key=btn_key, type=("secondary" if finalizado else "primary"),
+                                use_container_width=True, help=f"Ver rutina del día {dia}"):
+                        st.session_state["dia_sel"] = str(dia)
+                        # sincroniza la URL para persistencia (sobrevive reload/bloqueo)
+                        st.query_params.update({"semana": semana_sel, "dia": str(dia)})
+                        st.rerun()
+
 
     st.markdown("<div class='hr-light'></div>", unsafe_allow_html=True)
 
     # Mostrar rutina solo cuando haya día seleccionado
     dia_sel = st.session_state.get("dia_sel")
+    # Si llegó por URL (Inicio) y aún no hay día en session_state, siembra desde query param
+    if not dia_sel and qp_dia:
+        dia_sel = str(qp_dia)
+        st.session_state["dia_sel"] = dia_sel
+
     if not dia_sel:
         st.info("Selecciona un día en las tarjetas superiores para ver tu rutina.")
         st.stop()
-
     # Checkbox global de Sesión anterior
     mostrar_prev = st.checkbox(
         "📅 Mostrar sesión anterior",
@@ -640,18 +855,22 @@ def ver_rutinas():
             peso      = e.get("peso","")
             tiempo    = e.get("tiempo","")
             velocidad = e.get("velocidad","")
-            rir_val   = e.get("rir")
 
             # 1) Video (puede venir en e['video'] o dentro de 'detalle' como link)
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
 
-            # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad (SIN RIR)
+            # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad/RIR
             partes = [f"{_repstr(e)}"]
             if peso:      partes.append(f"{peso} kg")
             if tiempo:    partes.append(f"{tiempo} seg")
             if velocidad: partes.append(f"{velocidad} m/s")
             dsc = _descanso_texto(e)
             if dsc:       partes.append(f"{dsc}")
+
+            rir_text = _rirstr(e)           # ← usa la nueva función
+            if rir_text:
+                partes.append(f"RIR {rir_text}")
+
             info_str = " · ".join(partes)
 
             # 3) Contenedor visual
@@ -662,7 +881,6 @@ def ver_rutinas():
             mostrar_video_key = f"mostrar_video_{cliente_sel}_{semana_sel}_{circuito}_{idx}"
 
             if video_url:
-                # nombre como botón (ajustado al texto, no ocupa todo el ancho)
                 titulo_btn = nombre if not detalle_visible else f"{nombre} — {detalle_visible}"
                 btn_clicked = st.button(
                     titulo_btn,
@@ -673,24 +891,18 @@ def ver_rutinas():
                 if btn_clicked:
                     st.session_state[mostrar_video_key] = not st.session_state.get(mostrar_video_key, False)
             else:
-                # nombre como texto (si no hay link en detalle, lo mostramos normal)
                 titulo_linea = nombre + (f" — {detalle_visible}" if detalle_visible else "")
                 st.markdown(
                     f"<div style='font-weight:800;font-size:1.05rem;color:var(--text-main);'>{titulo_linea}</div>",
                     unsafe_allow_html=True
                 )
 
-            # 3.b) Línea de detalles (reps/peso/descanso/velocidad)
+            # 3.b) Línea de detalles (incluye ahora también el RIR)
             st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
 
-            # 3.c) RIR en una fila aparte
-            if rir_val:
-                st.markdown(f"<div class='muted' style='margin-top:2px;'>RIR {rir_val}</div>", unsafe_allow_html=True)
-
-            # 3.d) Mostrar video embebido si está activo
+            # 3.c) Mostrar video embebido si está activo
             if video_url and st.session_state.get(mostrar_video_key, False):
                 url = video_url
-                # Normalizar Shorts de YouTube
                 if "youtube.com/shorts/" in url:
                     try:
                         video_id = url.split("shorts/")[1].split("?")[0]
@@ -858,4 +1070,3 @@ def ver_rutinas():
 # Run
 if __name__ == "__main__":
     ver_rutinas()
-
