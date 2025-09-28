@@ -4,7 +4,7 @@ from __future__ import annotations
 import streamlit as st
 from firebase_admin import firestore
 from datetime import datetime, timedelta, date
-import json, random, re
+import json, random, re, math, html
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
@@ -92,6 +92,64 @@ st.markdown(
     }
     .summary-card__meta.muted {
         color: rgba(6, 78, 59, 0.7);
+    }
+    .planner-card {
+        background: var(--surface);
+        border: 1px solid var(--stroke);
+        border-radius: 18px;
+        padding: 18px 22px;
+        margin: 12px 0 22px;
+    }
+    .planner-card__body {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        align-items: center;
+        text-align: center;
+    }
+    .planner-card__motivation {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--success);
+    }
+    .planner-card__range {
+        font-size: 1.12rem;
+        font-weight: 700;
+    }
+    .planner-card__meta {
+        font-size: 0.92rem;
+        color: var(--text-main);
+    }
+    .planner-card__meta.muted {
+        color: var(--muted);
+    }
+    .planner-card__badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 12px;
+        border-radius: 999px;
+        background: rgba(0, 194, 255, 0.18);
+        color: var(--primary);
+        font-weight: 600;
+        width: fit-content;
+    }
+    .planner-card__note {
+        font-size: 0.84rem;
+        color: var(--muted);
+    }
+    .planner-card__label {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        display: block;
+        margin-bottom: 6px;
+    }
+    .planner-card__badge.is-active {
+        background: linear-gradient(135deg, rgba(0,194,255,0.2), rgba(34,197,94,0.25));
+        border: 1px solid rgba(34,197,94,0.45);
+        color: #10b981;
     }
     .days-subtitle {
         margin: 18px 0 12px;
@@ -233,6 +291,25 @@ def _format_minutos(v) -> str:
     if f is None: return ""
     n = int(round(f))
     return f"{n} Minuto" if n == 1 else f"{n} Minutos"
+
+def _peso_to_float(v):
+    try:
+        s = str(v or "").lower().replace("kg", "").replace(",", ".").strip()
+        if s == "":
+            return None
+        return float(s)
+    except Exception:
+        return None
+
+def _format_peso_value(value: float) -> str:
+    if value is None:
+        return ""
+    if not math.isfinite(value):
+        return ""
+    if abs(value - round(value)) < 1e-4:
+        return str(int(round(value)))
+    formatted = f"{value:.2f}".rstrip("0").rstrip(".")
+    return formatted
 
 # ==========================
 #  NORMALIZACIÓN / LISTAS
@@ -416,10 +493,87 @@ def _preparar_ejercicio_para_guardado(e: dict, correo_actor: str) -> dict:
     if rir_alc  is not None: e["rir_alcanzado"]  = rir_alc
     hay_input = any([(e.get("comentario","") or "").strip(), peso_alc is not None, reps_alc is not None, rir_alc is not None])
     if hay_input: e["coach_responsable"] = correo_actor
+    if "comentario" in e:
+        e["comentario"] = str(e.get("comentario", "")).strip()
     if "bloque" not in e: e["bloque"] = e.get("seccion","")
     return e
 
-def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejercicio_editado):
+def _aplicar_delta_en_dia(dia_data, ejercicio_ref, delta, peso_base_ref):
+    def _actualizar_ex(ex):
+        if not isinstance(ex, dict):
+            return False
+        if not _match_mismo_ejercicio(ex, ejercicio_ref):
+            return False
+        peso_actual = _peso_to_float(ex.get("peso"))
+        if peso_actual is None:
+            return False
+        if peso_base_ref is not None and abs(peso_actual - peso_base_ref) > 1e-4:
+            return False
+        nuevo_peso = max(0.0, peso_actual + delta)
+        ex["peso"] = _format_peso_value(nuevo_peso)
+        return True
+
+    changed = False
+
+    if isinstance(dia_data, list):
+        for ex in dia_data:
+            if _actualizar_ex(ex):
+                changed = True
+    elif isinstance(dia_data, dict):
+        ejercicios = None
+        if isinstance(dia_data.get("ejercicios"), list):
+            ejercicios = dia_data["ejercicios"]
+        if ejercicios is not None:
+            for ex in ejercicios:
+                if _actualizar_ex(ex):
+                    changed = True
+        else:
+            for key, ex in dia_data.items():
+                if isinstance(ex, dict) and _actualizar_ex(ex):
+                    dia_data[key] = ex
+                    changed = True
+    return changed
+
+def _propagar_peso_a_futuras_semanas(db, correo_original, bloque_rutina, semana_sel, dia_sel, ejercicio_editado, delta, peso_base_ref):
+    if not correo_original or not bloque_rutina:
+        return
+    if delta is None or abs(delta) < 1e-4:
+        return
+    dia_sel = str(dia_sel)
+    try:
+        snaps = list(
+            db.collection("rutinas_semanales")
+              .where("correo", "==", correo_original)
+              .where("bloque_rutina", "==", bloque_rutina)
+              .stream()
+        )
+    except Exception:
+        return
+
+    futuros = []
+    for snap in snaps:
+        data = snap.to_dict() or {}
+        fecha = data.get("fecha_lunes")
+        if not fecha or fecha <= semana_sel:
+            continue
+        futuros.append((fecha, snap, data))
+
+    if not futuros:
+        return
+
+    futuros.sort(key=lambda tup: tup[0])
+    for _, snap, data in futuros:
+        rutina = data.get("rutina", {}) or {}
+        if dia_sel not in rutina:
+            continue
+        dia_data = rutina[dia_sel]
+        if _aplicar_delta_en_dia(dia_data, ejercicio_editado, delta, peso_base_ref):
+            try:
+                snap.reference.set({"rutina": {dia_sel: dia_data}}, merge=True)
+            except Exception:
+                continue
+
+def guardar_reporte_ejercicio(db, correo_cliente_norm, correo_original, semana_sel, dia_sel, ejercicio_editado, bloque_rutina=None):
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
     doc_ref = db.collection("rutinas_semanales").document(doc_id)
@@ -434,9 +588,29 @@ def guardar_reporte_ejercicio(db, correo_cliente_norm, semana_sel, dia_sel, ejer
         if _match_mismo_ejercicio(ex, ejercicio_editado):
             ejercicios_lista[i] = ejercicio_editado; changed = True; break
     if not changed: ejercicios_lista.append(ejercicio_editado)
-    doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True); return True
+    doc_ref.set({"rutina": {dia_sel: ejercicios_lista}}, merge=True)
 
-def guardar_reportes_del_dia(db, correo_cliente_norm, semana_sel, dia_sel, ejercicios, correo_actor, rpe_valor):
+    peso_base_ref = _peso_to_float(ejercicio_editado.get("peso"))
+    peso_alcanzado_val = ejercicio_editado.get("peso_alcanzado")
+    if peso_alcanzado_val is None:
+        peso_alcanzado_val, _, _ = _parsear_series(ejercicio_editado.get("series_data", []))
+    if peso_base_ref is not None and peso_alcanzado_val is not None:
+        delta = float(peso_alcanzado_val) - float(peso_base_ref)
+        if abs(delta) >= 1e-4:
+            _propagar_peso_a_futuras_semanas(
+                db=db,
+                correo_original=correo_original,
+                bloque_rutina=bloque_rutina,
+                semana_sel=semana_sel,
+                dia_sel=dia_sel,
+                ejercicio_editado=ejercicio_editado,
+                delta=delta,
+                peso_base_ref=peso_base_ref,
+            )
+
+    return True
+
+def guardar_reportes_del_dia(db, correo_cliente_norm, correo_original, semana_sel, dia_sel, ejercicios, correo_actor, rpe_valor, bloque_rutina=None):
     dia_sel = str(dia_sel)
     fecha_norm = semana_sel.replace("-", "_")
     doc_id = f"{correo_cliente_norm}_{fecha_norm}"
@@ -458,8 +632,15 @@ def guardar_reportes_del_dia(db, correo_cliente_norm, semana_sel, dia_sel, ejerc
         ex_prev = idx_guardados.get(key)
         if ex_prev and _tiene_reporte_guardado(ex_prev): continue
         e2 = _preparar_ejercicio_para_guardado(dict(e), correo_actor)
-        ok = guardar_reporte_ejercicio(db=db, correo_cliente_norm=correo_cliente_norm,
-                                       semana_sel=semana_sel, dia_sel=dia_sel, ejercicio_editado=e2)
+        ok = guardar_reporte_ejercicio(
+            db=db,
+            correo_cliente_norm=correo_cliente_norm,
+            correo_original=correo_original,
+            semana_sel=semana_sel,
+            dia_sel=dia_sel,
+            ejercicio_editado=e2,
+            bloque_rutina=bloque_rutina,
+        )
         if not ok: return False
     updates = {"rutina": {f"{dia_sel}_finalizado": True,
                           f"{dia_sel}_finalizado_por": correo_actor,
@@ -543,25 +724,60 @@ def ver_rutinas():
 
     cliente_sel = None
     if es_entrenador(rol):
-        clientes = sorted({(r.get("cliente") or "").strip() for r in rutinas_all if r.get("cliente")})
+        rol_lower = rol.strip().lower()
+        limitar_por_responsable = rol_lower == "entrenador"
+
+        @st.cache_data(show_spinner=False)
+        def _usuarios_por_correo():
+            mapping = {}
+            try:
+                for snap in db.collection("usuarios").stream():
+                    if not snap.exists:
+                        continue
+                    data = snap.to_dict() or {}
+                    correo_cli = (data.get("correo") or "").strip().lower()
+                    if correo_cli:
+                        mapping[correo_cli] = data
+            except Exception:
+                pass
+            return mapping
+
+        usuarios_por_correo = _usuarios_por_correo() if limitar_por_responsable else {}
+        correos_entrenador = {correo_raw}
+        if correo_norm:
+            correos_entrenador.add(correo_norm)
+        correos_entrenador.add(normalizar_correo(correo_raw))
+
+        def _cliente_autorizado(rutina_doc: dict) -> bool:
+            if not limitar_por_responsable:
+                return True
+            correo_cliente = (rutina_doc.get("correo") or "").strip().lower()
+            if not correo_cliente:
+                return False
+            datos_cli = usuarios_por_correo.get(correo_cliente)
+            responsable = (datos_cli.get("coach_responsable") or "").strip().lower() if datos_cli else ""
+            if responsable and responsable == correo_raw:
+                return True
+            entrenador_reg = (rutina_doc.get("entrenador") or "").strip().lower()
+            if entrenador_reg and entrenador_reg in correos_entrenador:
+                return True
+            if entrenador_reg and normalizar_correo(entrenador_reg) in correos_entrenador:
+                return True
+            return False
+
+        clientes = sorted({
+            (r.get("cliente") or "").strip()
+            for r in rutinas_all
+            if r.get("cliente") and _cliente_autorizado(r)
+        })
         if not clientes:
             st.info("No hay clientes registrados aún."); st.stop()
 
         busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
         busqueda_lower = busqueda.lower()
+        clientes_asignados = clientes
 
-        rol_lower = rol.strip().lower()
-        correos_entrenador = {correo_raw, correo_norm, normalizar_correo(correo_raw)}
-        clientes_asignados = sorted({
-            (r.get("cliente") or "").strip()
-            for r in rutinas_all
-            if r.get("cliente") and ((r.get("entrenador") or "").strip().lower() in correos_entrenador
-                                       or normalizar_correo(r.get("entrenador") or "") in correos_entrenador)
-        })
-
-        base_lista = clientes
-        if rol_lower in {"entrenador", "admin", "administrador"}:
-            base_lista = clientes_asignados
+        base_lista = clientes_asignados if rol_lower in {"entrenador", "admin", "administrador"} else clientes
 
         if busqueda_lower:
             candidatos = [c for c in clientes if busqueda_lower in c.lower()]
@@ -655,21 +871,14 @@ def ver_rutinas():
 
     index_semana = semanas.index(pre_semana) if pre_semana in semanas else 0
     # ── Barra superior: mensaje + semana + refrescar ─────────────────────────────
+    motivacional_msg = mensaje_motivador_del_dia(nombre, correo_norm) if not es_staff else None
     status_card = st.container()
-    motivacional_msg = None
     with status_card:
-        st.markdown("<div class='status-card'>", unsafe_allow_html=True)
-        msg_cols = st.columns([4, 1], gap="medium")
-        with msg_cols[0]:
-            bloques_status = ["<div class='status-card__message'>"]
-            if not es_staff:
-                motivacional_msg = mensaje_motivador_del_dia(nombre, correo_norm)
-                bloques_status.append(f"<div class='status-card__greet'>{motivacional_msg}</div>")
-            bloques_status.append("<div class='status-card__title'>Planifica tu semana de entrenamiento</div>")
-            bloques_status.append("</div>")
-            st.markdown("".join(bloques_status), unsafe_allow_html=True)
-        with msg_cols[1]:
-            st.markdown("<span class='status-card__label'>Semana actual</span>", unsafe_allow_html=True)
+        st.markdown("<div class='planner-card'>", unsafe_allow_html=True)
+        planner_cols = st.columns([3, 2], gap="large")
+        left_summary = planner_cols[0].empty()
+        with planner_cols[1]:
+            st.markdown("<span class='planner-card__label'>Semana</span>", unsafe_allow_html=True)
             semana_sel = st.selectbox(
                 "Semana",
                 semanas,
@@ -677,14 +886,15 @@ def ver_rutinas():
                 key="semana_sel",
                 label_visibility="collapsed",
             )
-        try:
-            week_start = datetime.strptime(semana_sel, "%Y-%m-%d").date()
-            week_end = week_start + timedelta(days=6)
-            rango_texto = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
-        except Exception:
-            rango_texto = "Semana sin rango definido"
-        st.markdown(f"<div class='status-card__range'>{rango_texto}</div>", unsafe_allow_html=True)
+            planner_actions = st.container()
         st.markdown("</div>", unsafe_allow_html=True)
+
+    try:
+        week_start = datetime.strptime(semana_sel, "%Y-%m-%d").date()
+        week_end = week_start + timedelta(days=6)
+        rango_texto = f"{week_start.strftime('%d %b')} – {week_end.strftime('%d %b %Y')}"
+    except Exception:
+        rango_texto = "Semana sin rango definido"
 
     # Si venimos por query param la primera vez, SEMBRAMOS el día y marcamos bandera
     if qp_semana and qp_dia and "dia_sel" not in st.session_state:
@@ -739,41 +949,34 @@ def ver_rutinas():
         if total_sesiones else "Sin sesiones registradas"
     )
 
-    st.markdown(
-        f"""
-        <div class='summary-card'>
-            <div class='summary-card__title'>📦 Bloque de rutina</div>
-            <div class='summary-card__meta'>{bloque_meta}</div>
-            <div class='summary-card__meta muted'>{sesiones_texto}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Si ya hay día elegido (session_state o por query param), NO mostrar las tarjetas
     dia_actual = st.session_state.get("dia_sel") or (str(qp_dia) if qp_dia else None)
 
+    left_blocks = ["<div class='planner-card__body'>"]
+    if motivacional_msg:
+        left_blocks.append(f"<div class='planner-card__motivation'>{motivacional_msg}</div>")
+    left_blocks.append(f"<div class='planner-card__meta'>Bloque de rutina · {bloque_meta}</div>")
+    left_blocks.append(f"<div class='planner-card__meta muted'>{sesiones_texto}</div>")
     if dia_actual:
-        # Chip de día seleccionado + botón para cambiar día (sin volver a Inicio)
-        chip_cols = st.columns([2, 1], gap="small")
-        with chip_cols[0]:
-            st.markdown(
-                f"<div class='badge badge--pending' style='font-size:14px;'>Día seleccionado: <b>{dia_actual}</b></div>",
-                unsafe_allow_html=True
-            )
-        with chip_cols[1]:
-            if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary", use_container_width=True):
-                # Quitar día, mantener semana en la URL
+        left_blocks.append(f"<div class='planner-card__badge is-active'>Día {dia_actual}</div>")
+    else:
+        left_blocks.append("<div class='planner-card__note'>Selecciona un día para revisar la sesión detallada.</div>")
+    left_blocks.append("</div>")
+    left_summary.markdown("".join(left_blocks), unsafe_allow_html=True)
+
+    with planner_actions:
+        if dia_actual:
+            st.markdown("<div style='display:flex; justify-content:flex-end;'>", unsafe_allow_html=True)
+            if st.button("Cambiar día", key=f"cambiar_{semana_sel}_{dia_actual}", type="secondary"):
                 st.session_state.pop("dia_sel", None)
                 st.query_params.clear()
                 st.query_params.update({"semana": semana_sel})
                 st.rerun()
-        st.markdown(
-            "<p class='days-subtitle'>Usa “Cambiar día” para volver a la lista y revisar otro entrenamiento.</p>",
-            unsafe_allow_html=True,
-        )
-    else:
-        # Aún no hay día seleccionado → mostrar progreso + tarjetas
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div class='planner-card__note'>Selecciona un día en las tarjetas inferiores para ver la rutina.</div>", unsafe_allow_html=True)
+
+    # Aún no hay día seleccionado → mostrar progreso + tarjetas
+    if not dia_actual:
         if dias_dash:
             progreso_valor = sesiones_completadas/len(dias_dash)
             progreso_texto = None if es_staff else f"{sesiones_completadas}/{len(dias_dash)} sesiones completadas"
@@ -900,6 +1103,16 @@ def ver_rutinas():
             # 3.b) Línea de detalles (incluye ahora también el RIR)
             st.markdown(f"<div class='muted' style='margin-top:2px;'>{info_str}</div>", unsafe_allow_html=True)
 
+            comentario_cliente = (e.get("comentario", "") or "").strip()
+            if comentario_cliente:
+                st.markdown(
+                    f"<div style='margin-top:6px; padding:10px 12px; border-left:3px solid var(--primary); background:rgba(15,23,42,0.35); border-radius:8px;'>"
+                    f"<div style='font-size:0.85rem; color:var(--muted); text-transform:uppercase; letter-spacing:0.08em;'>Comentario del deportista</div>"
+                    f"<div style='font-size:0.96rem; color:var(--text-main); margin-top:4px;'>{html.escape(comentario_cliente)}</div>"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
             # 3.c) Mostrar video embebido si está activo
             if video_url and st.session_state.get(mostrar_video_key, False):
                 url = video_url
@@ -1016,9 +1229,11 @@ def ver_rutinas():
                         ok = guardar_reporte_ejercicio(
                             db=db,
                             correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
+                            correo_original=rutina_doc.get("correo",""),
                             semana_sel=semana_sel,
                             dia_sel=str(dia_sel),
                             ejercicio_editado=e,
+                            bloque_rutina=rutina_doc.get("bloque_rutina"),
                         )
                         if ok:
                             st.success("✅ Reporte guardado.")
@@ -1050,11 +1265,13 @@ def ver_rutinas():
                         ok_all = guardar_reportes_del_dia(
                             db=db,
                             correo_cliente_norm=normalizar_correo(rutina_doc.get("correo","")),
+                            correo_original=rutina_doc.get("correo",""),
                             semana_sel=semana_sel,
                             dia_sel=str(dia_sel),
                             ejercicios=ejercicios,
                             correo_actor=st.session_state.get("correo",""),
                             rpe_valor=rpe_valor,
+                            bloque_rutina=rutina_doc.get("bloque_rutina"),
                         )
                         if ok_all:
                             st.cache_data.clear()
