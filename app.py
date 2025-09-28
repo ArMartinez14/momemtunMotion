@@ -86,6 +86,13 @@ div[data-testid="stButton"][data-key="btn_logout"] button {
   border: 1px solid rgba(249, 115, 22, 0.45) !important;
   box-shadow: none !important;
 }
+
+div[data-testid="stButton"][data-key="btn_back_inicio"] button {
+  background: linear-gradient(135deg, #34d399, #10b981) !important;
+  color: #012b1a !important;
+  border: 1px solid rgba(16, 185, 129, 0.4) !important;
+  box-shadow: none !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
