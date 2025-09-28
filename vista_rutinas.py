@@ -765,29 +765,45 @@ def ver_rutinas():
                 return True
             return False
 
-        clientes = sorted({
+        clientes_asignados = sorted({
             (r.get("cliente") or "").strip()
             for r in rutinas_all
             if r.get("cliente") and _cliente_autorizado(r)
         })
-        if not clientes:
+
+        clientes_todos_info: dict[str, set[str]] = {}
+        for r in rutinas_all:
+            nombre_cli = (r.get("cliente") or "").strip()
+            correo_cli = (r.get("correo") or "").strip().lower()
+            if not nombre_cli:
+                continue
+            clientes_todos_info.setdefault(nombre_cli, set())
+            if correo_cli:
+                clientes_todos_info[nombre_cli].add(correo_cli)
+
+        clientes_todos = sorted(clientes_todos_info.keys())
+        if not clientes_todos:
             st.info("No hay clientes registrados aún."); st.stop()
 
         busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
         busqueda_lower = busqueda.lower()
-        clientes_asignados = clientes
 
-        base_lista = clientes_asignados if rol_lower in {"entrenador", "admin", "administrador"} else clientes
+        base_lista = clientes_asignados if clientes_asignados else clientes_todos
 
         if busqueda_lower:
-            candidatos = [c for c in clientes if busqueda_lower in c.lower()]
+            candidatos = []
+            for nombre_cli, correos_cli in clientes_todos_info.items():
+                match_nombre = busqueda_lower in nombre_cli.lower()
+                match_correo = any(busqueda_lower in c for c in correos_cli)
+                if match_nombre or match_correo:
+                    candidatos.append(nombre_cli)
         else:
             candidatos = base_lista
 
         if "_mostrar_lista_clientes" not in st.session_state:
             st.session_state["_mostrar_lista_clientes"] = True
 
-        if st.session_state.get("_cliente_sel") not in clientes:
+        if st.session_state.get("_cliente_sel") not in clientes_todos:
             st.session_state.pop("_cliente_sel", None)
             st.session_state["_mostrar_lista_clientes"] = True
 
@@ -800,7 +816,7 @@ def ver_rutinas():
         if mostrar_lista or not cliente_sel:
             if not candidatos:
                 mensaje_sin_resultados = (
-                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if rol_lower in {"entrenador", "admin", "administrador"} and not busqueda_lower
+                    "No tienes deportistas asignados. Usa la búsqueda para consultar otros." if (not clientes_asignados and not busqueda_lower)
                     else "No se encontraron coincidencias para esa búsqueda."
                 )
                 st.info(mensaje_sin_resultados)
