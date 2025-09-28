@@ -441,11 +441,6 @@ def crear_rutinas():
     usuarios = cargar_usuarios()
 
     correo_login = (st.session_state.get("correo") or "").strip().lower()
-    if rol in ("entrenador",) and correo_login:
-        usuarios = [
-            u for u in usuarios
-            if (u.get("coach_responsable") or "").strip().lower() == correo_login
-        ]
 
     nombres = sorted(set(u.get("nombre", "") for u in usuarios))
     correos_entrenadores = sorted([
