@@ -254,26 +254,34 @@ def cargar_ejercicios():
     rol = (st.session_state.get("rol") or "").strip()
     es_admin = rol in ADMIN_ROLES
 
+    def _store(target: dict[str, dict], data: dict) -> None:
+        nombre = (data.get("nombre") or "").strip()
+        if nombre:
+            target[nombre] = data
+
     ejercicios_por_nombre: dict[str, dict] = {}
     try:
         if es_admin:
             for doc in db.collection("ejercicios").stream():
-                if not doc.exists: continue
-                data = doc.to_dict() or {}
-                nombre = (data.get("nombre") or "").strip()
-                if nombre: ejercicios_por_nombre[nombre] = data
+                if not doc.exists:
+                    continue
+                _store(ejercicios_por_nombre, doc.to_dict() or {})
         else:
+            publicos: dict[str, dict] = {}
+            personales: dict[str, dict] = {}
             for doc in db.collection("ejercicios").where("publico", "==", True).stream():
-                if not doc.exists: continue
-                data = doc.to_dict() or {}
-                nombre = (data.get("nombre") or "").strip()
-                if nombre: ejercicios_por_nombre[nombre] = data
+                if not doc.exists:
+                    continue
+                _store(publicos, doc.to_dict() or {})
             if correo_usuario:
                 for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
-                    if not doc.exists: continue
+                    if not doc.exists:
+                        continue
                     data = doc.to_dict() or {}
-                    nombre = (data.get("nombre") or "").strip()
-                    if nombre: ejercicios_por_nombre[nombre] = data
+                    _store(personales, data)
+                    publicos.pop((data.get("nombre") or "").strip(), None)
+            ejercicios_por_nombre.update(publicos)
+            ejercicios_por_nombre.update(personales)
     except Exception as e:
         st.error(f"Error cargando ejercicios: {e}")
     return ejercicios_por_nombre
@@ -432,6 +440,13 @@ def crear_rutinas():
     ejercicios_dict = cargar_ejercicios()
     usuarios = cargar_usuarios()
 
+    correo_login = (st.session_state.get("correo") or "").strip().lower()
+    if rol in ("entrenador",) and correo_login:
+        usuarios = [
+            u for u in usuarios
+            if (u.get("coach_responsable") or "").strip().lower() == correo_login
+        ]
+
     nombres = sorted(set(u.get("nombre", "") for u in usuarios))
     correos_entrenadores = sorted([
         u.get("correo", "") for u in usuarios if (u.get("rol", "") or "").lower() in ["entrenador", "admin", "administrador"]
@@ -460,7 +475,6 @@ def crear_rutinas():
     objetivo = st.text_area("🎯 Objetivo de la rutina (opcional)", value=st.session_state.get("objetivo", ""))
     st.session_state["objetivo"] = objetivo
 
-    correo_login = (st.session_state.get("correo") or "").strip().lower()
     entrenador = st.text_input("Correo del entrenador responsable:", value=correo_login, disabled=True)
     # === 📥 Cargar rutina previa del MISMO cliente como base (opcional) ===
     with st.expander("📥 Cargar rutina previa como base", expanded=False):
@@ -833,11 +847,19 @@ def crear_rutinas():
                         # Buscar + Ejercicio (INLINE con alta si no existe)
                         # =======================
                         # --- Buscador de ejercicios (Warm Up y Work Out)
+                        buscar_key = f"buscar_{key_entrenamiento}"
+                        if buscar_key not in st.session_state:
+                            st.session_state[buscar_key] = fila.get("BuscarEjercicio", "")
+                        previo_buscar = fila.get("BuscarEjercicio", "")
                         palabra = cols[pos["Buscar Ejercicio"]].text_input(
-                            "", value=fila.get("BuscarEjercicio", ""),
-                            key=f"buscar_{key_entrenamiento}",
+                            "",
+                            value=st.session_state[buscar_key],
+                            key=buscar_key,
                             label_visibility="collapsed", placeholder="Buscar ejercicio…"
                         )
+                        if normalizar_texto(palabra) != normalizar_texto(previo_buscar):
+                            st.session_state.pop(f"select_{key_entrenamiento}", None)
+                            fila["_exact_on_load"] = False
                         fila["BuscarEjercicio"] = palabra
 
                         nombre_original = (fila.get("Ejercicio","") or "").strip()
@@ -878,6 +900,7 @@ def crear_rutinas():
                             "",
                             ejercicios_encontrados,
                             key=f"select_{key_entrenamiento}",
+                            index=0,
                             label_visibility="collapsed"
                         )
 
@@ -1036,16 +1059,41 @@ def crear_rutinas():
                                 index=(opciones_var.index(fila.get(variable_key, "")) if fila.get(variable_key, "") in opciones_var else 0),
                                 key=f"var{p}_{key_entrenamiento}_{idx}"
                             )
-                            fila[cantidad_key] = pcols[1].text_input(
-                                f"Cantidad {p}", value=fila.get(cantidad_key, ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
-                            )
-                            fila[operacion_key] = pcols[2].selectbox(
+                            fila[operacion_key] = pcols[1].selectbox(
                                 f"Operación {p}", opciones_ope,
                                 index=(opciones_ope.index(fila.get(operacion_key, "")) if fila.get(operacion_key, "") in opciones_ope else 0),
                                 key=f"ope{p}_{key_entrenamiento}_{idx}"
                             )
+                            fila[cantidad_key] = pcols[2].text_input(
+                                f"Cantidad {p}", value=fila.get(cantidad_key, ""), key=f"cant{p}_{key_entrenamiento}_{idx}"
+                            )
                             fila[semanas_key] = pcols[3].text_input(
                                 f"Semanas {p}", value=fila.get(semanas_key, ""), key=f"sem{p}_{key_entrenamiento}_{idx}"
+                            )
+
+                            cond_cols = st.columns([1.2, 1.2, 1])
+                            cond_cols[0].markdown("<small>Condición</small>", unsafe_allow_html=True)
+                            cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx}"
+                            cond_op_key = f"condop{p}_{key_entrenamiento}_{idx}"
+                            cond_val_key = f"condval{p}_{key_entrenamiento}_{idx}"
+                            opciones_cond_var = ["", "rir"]
+                            opciones_cond_op = ["", ">", "<", ">=", "<="]
+                            fila[f"CondicionVar_{p}"] = cond_cols[0].selectbox(
+                                "Variable condición",
+                                opciones_cond_var,
+                                index=(opciones_cond_var.index(fila.get(f"CondicionVar_{p}", "")) if fila.get(f"CondicionVar_{p}", "") in opciones_cond_var else 0),
+                                key=cond_var_key,
+                                label_visibility="collapsed"
+                            )
+                            fila[f"CondicionOp_{p}"] = cond_cols[1].selectbox(
+                                "Operador condición",
+                                opciones_cond_op,
+                                index=(opciones_cond_op.index(fila.get(f"CondicionOp_{p}", "")) if fila.get(f"CondicionOp_{p}", "") in opciones_cond_op else 0),
+                                key=cond_op_key,
+                                label_visibility="collapsed"
+                            )
+                            fila[f"CondicionValor_{p}"] = cond_cols[2].text_input(
+                                "", value=str(fila.get(f"CondicionValor_{p}", "") or ""), key=cond_val_key, label_visibility="collapsed"
                             )
 
                         # Copia entre días
@@ -1274,6 +1322,72 @@ def crear_rutinas():
     if st.button("Guardar Rutina", type="primary", use_container_width=True):
         if all([str(nombre_sel).strip(), str(correo).strip(), str(entrenador).strip()]):
             objetivo = st.session_state.get("objetivo", "")
+            # Forzar sincronización de los datos editados en todos los días/secciones
+            for idx_dia, _ in enumerate(dias_labels):
+                for seccion in ("Warm Up", "Work Out"):
+                    key_seccion = f"rutina_dia_{idx_dia + 1}_{seccion.replace(' ', '_')}"
+                    filas = st.session_state.get(key_seccion)
+                    if not isinstance(filas, list):
+                        continue
+                    filas_actualizadas: list[dict] = []
+                    for idx_fila, fila in enumerate(filas):
+                        base = dict(fila)
+                        key_entrenamiento = f"{idx_dia}_{seccion.replace(' ', '_')}_{idx_fila}"
+
+                        buscar_key = f"buscar_{key_entrenamiento}"
+                        base["BuscarEjercicio"] = st.session_state.get(buscar_key, base.get("BuscarEjercicio", ""))
+
+                        circuito_val = st.session_state.get(f"circ_{key_entrenamiento}")
+                        if circuito_val is not None:
+                            base["Circuito"] = circuito_val
+
+                        buscar_val = st.session_state.get(f"buscar_{key_entrenamiento}")
+                        if buscar_val is not None:
+                            base["BuscarEjercicio"] = buscar_val
+
+                        select_val = st.session_state.get(f"select_{key_entrenamiento}")
+                        if select_val:
+                            base["Ejercicio"] = select_val if select_val != "(sin resultados)" else (buscar_val or "").strip()
+                        elif buscar_val is not None:
+                            base["Ejercicio"] = (buscar_val or "").strip()
+
+                        for pref, campo in (
+                            ("det", "Detalle"),
+                            ("ser", "Series"),
+                            ("rmin", "RepsMin"),
+                            ("rmax", "RepsMax"),
+                            ("peso", "Peso"),
+                            ("tiempo", "Tiempo"),
+                            ("vel", "Velocidad"),
+                            ("desc", "Descanso"),
+                            ("rirmin", "RirMin"),
+                            ("rirmax", "RirMax"),
+                        ):
+                            widget_val = st.session_state.get(f"{pref}_{key_entrenamiento}")
+                            if widget_val is not None:
+                                base[campo] = widget_val
+
+                        # Progresiones (1..3)
+                        for p in (1, 2, 3):
+                            var_key = f"var{p}_{key_entrenamiento}_{idx_fila}"
+                            cant_key = f"cant{p}_{key_entrenamiento}_{idx_fila}"
+                            ope_key = f"ope{p}_{key_entrenamiento}_{idx_fila}"
+                            sem_key = f"sem{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_op_key = f"condop{p}_{key_entrenamiento}_{idx_fila}"
+                            cond_val_key = f"condval{p}_{key_entrenamiento}_{idx_fila}"
+                            if var_key in st.session_state:
+                                base[f"Variable_{p}"] = st.session_state.get(var_key, base.get(f"Variable_{p}", ""))
+                                base[f"Cantidad_{p}"] = st.session_state.get(cant_key, base.get(f"Cantidad_{p}", ""))
+                                base[f"Operacion_{p}"] = st.session_state.get(ope_key, base.get(f"Operacion_{p}", ""))
+                                base[f"Semanas_{p}"] = st.session_state.get(sem_key, base.get(f"Semanas_{p}", ""))
+                                base[f"CondicionVar_{p}"] = st.session_state.get(cond_var_key, base.get(f"CondicionVar_{p}", ""))
+                                base[f"CondicionOp_{p}"] = st.session_state.get(cond_op_key, base.get(f"CondicionOp_{p}", ""))
+                                base[f"CondicionValor_{p}"] = st.session_state.get(cond_val_key, base.get(f"CondicionValor_{p}", ""))
+
+                        filas_actualizadas.append(base)
+
+                    st.session_state[key_seccion] = filas_actualizadas
             guardar_rutina(
                 nombre_sel.strip(),
                 correo.strip(),
