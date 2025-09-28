@@ -127,6 +127,27 @@ def es_admin() -> bool:
             pass
     return False
 
+@st.cache_data(show_spinner=False)
+def listar_entrenadores():
+    coaches = []
+    try:
+        for snap in db.collection("usuarios").stream():
+            if not snap.exists:
+                continue
+            data = snap.to_dict() or {}
+            rol = (data.get("rol") or data.get("role") or "").strip().lower()
+            if rol not in {"entrenador", "admin", "administrador"}:
+                continue
+            correo = (data.get("correo") or "").strip().lower()
+            if not correo:
+                continue
+            nombre = (data.get("nombre") or correo).strip()
+            coaches.append((nombre, correo))
+    except Exception:
+        pass
+    coaches.sort(key=lambda item: item[0].lower())
+    return coaches
+
 # ====== select con “agregar nuevo” (igual) ======
 def combo_con_agregar(titulo: str, opciones: list[str], key_base: str, valor_inicial: str = "") -> str:
     SENTINEL = "➕ Agregar nuevo…"
@@ -231,12 +252,10 @@ def _set_mode(m):
 def _get_mode() -> str:
     return st.session_state.get("admin_panel_mode", "menu")
 
-def _btn_volver():
-    cols = st.columns([1, 6])
-    with cols[0]:
-        if st.button("← Volver", type="secondary", use_container_width=True):
-            _set_mode("menu")
-            st.rerun()
+def _panel_back_button():
+    if st.button("Regresar al menú del panel", type="secondary"):
+        _set_mode("menu")
+        st.rerun()
 
 # ==========================
 # 🧩 Pantalla: Menú por tarjetas
@@ -294,10 +313,7 @@ def _render_menu():
 # 👤 Formulario: Cliente
 # ==========================
 def _render_cliente():
-    _btn_volver()
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<h4 class='h-accent'>👤 Cliente Nuevo</h4>", unsafe_allow_html=True)
-
+    _panel_back_button()
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>👤 Cliente Nuevo</h4>", unsafe_allow_html=True)
 
@@ -319,6 +335,27 @@ def _render_cliente():
 
     if correo_input:
         st.caption(f"Se guardará como: **{correo_limpio or '—'}**")
+
+    correo_usuario = (st.session_state.get("correo") or "").strip().lower()
+    coach_responsable = correo_usuario
+
+    if es_admin():
+        entrenadores = listar_entrenadores()
+        if entrenadores:
+            labels = [f"{nombre} ({correo})" for nombre, correo in entrenadores]
+            try:
+                default_idx = next(idx for idx, (_, c) in enumerate(entrenadores) if c == correo_usuario)
+            except StopIteration:
+                default_idx = 0
+            elegido = st.selectbox(
+                "Entrenador responsable",
+                labels,
+                index=default_idx,
+                help="El coach que verá y gestionará a este cliente."
+            )
+            coach_responsable = entrenadores[labels.index(elegido)][1]
+        else:
+            st.info("No se encontraron entrenadores registrados; se asignará a tu correo por defecto.")
 
     if st.session_state.get("rol") == "admin":
         opciones_rol = ["deportista", "entrenador", "admin"]
@@ -362,6 +399,7 @@ def _render_cliente():
                 "correo": correo_limpio,
                 "rol": rol,
                 "creado_en": datetime.utcnow(),
+                "coach_responsable": coach_responsable,
             }
 
             try:
@@ -375,7 +413,7 @@ def _render_cliente():
 # 🏋️ Formulario: Ejercicio
 # ==========================
 def _render_ejercicio():
-    _btn_volver()
+    _panel_back_button()
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>📌 Crear o Editar Ejercicio</h4>", unsafe_allow_html=True)
     st.markdown("<div class='muted'>Usa este formulario para registrar ejercicios con su clasificación. Los campos marcados son obligatorios.</div>", unsafe_allow_html=True)
@@ -560,7 +598,7 @@ def _render_ejercicio():
 # 🚀 Punto de entrada
 # ==========================
 def _render_carga_csv():
-    _btn_volver()
+    _panel_back_button()
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h4 class='h-accent'>📤 Importar ejercicios desde archivo</h4>", unsafe_allow_html=True)
     st.caption(
