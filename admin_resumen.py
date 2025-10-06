@@ -4,9 +4,13 @@ from datetime import datetime
 from typing import Optional, Dict, Any, List
 from collections import defaultdict
 
+import pandas as pd
+
 import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
+
+from app_core.utils import set_usuario_activo, empresa_de_usuario, usuario_activo, EMPRESA_DESCONOCIDA
 
 # ========== Firebase: inicializar solo una vez ==========
 if not firebase_admin._apps:
@@ -23,6 +27,12 @@ def _ensure_session_defaults():
         st.session_state.rol = ""
     if "correo" not in st.session_state:
         st.session_state.correo = ""
+
+
+def _trigger_rerun():
+    rerun_fn = getattr(st, "rerun", None) or getattr(st, "experimental_rerun", None)
+    if rerun_fn:
+        rerun_fn()
 
 def _es_admin() -> bool:
     """Admin si rol == admin o correo == ADMIN_EMAIL en secrets."""
@@ -94,6 +104,22 @@ def _cargar_usuarios_deportistas() -> List[Dict[str, Any]]:
     except Exception:
         pass
     return res
+
+
+@st.cache_data(ttl=120)
+def _cargar_todos_usuarios() -> List[Dict[str, Any]]:
+    usuarios: List[Dict[str, Any]] = []
+    try:
+        for snap in db.collection("usuarios").stream():
+            if not snap.exists:
+                continue
+            data = snap.to_dict() or {}
+            data["_id"] = snap.id
+            data["correo"] = (data.get("correo") or "").strip().lower()
+            usuarios.append(data)
+    except Exception:
+        pass
+    return usuarios
 
 
 # ========== Buscar última rutina SIN índices compuestos ==========
@@ -189,10 +215,112 @@ def ver_resumen_entrenadores():
         st.warning("No tienes permisos para ver esta sección.")
         st.stop()
 
+    mapa_entrenadores = _mapear_entrenadores()
+    if mapa_entrenadores:
+        lista_entrenadores = pd.DataFrame(
+            sorted(
+                (
+                    {"Nombre": nombre or correo, "Correo": correo}
+                    for correo, nombre in mapa_entrenadores.items()
+                ),
+                key=lambda r: r["Nombre"].lower()
+            )
+        )
+        st.markdown("#### Entrenadores registrados")
+        st.dataframe(lista_entrenadores, use_container_width=True)
+    else:
+        st.caption("No hay usuarios con rol entrenador registrados.")
+
+    st.markdown("<div class='card'>", unsafe_allow_html=True)
+    st.markdown("<h4 class='h-accent'>🛑 Dar de baja / reactivar usuarios</h4>", unsafe_allow_html=True)
+    usuarios_totales = _cargar_todos_usuarios()
+    if not usuarios_totales:
+        st.info("No se encontraron usuarios en la colección.")
+    else:
+        usuarios_map: Dict[str, Dict[str, Any]] = {}
+        for u in usuarios_totales:
+            correo_u = (u.get("correo") or "").strip().lower()
+            doc_id_u = u.get("_id")
+            if correo_u:
+                usuarios_map[correo_u] = u
+                usuarios_map[_normalizar_id_correo(correo_u)] = u
+            if doc_id_u:
+                usuarios_map[doc_id_u] = u
+
+        df_usuarios = pd.DataFrame([
+            {
+                "Nombre": (u.get("nombre") or u.get("correo") or "").strip(),
+                "Correo": (u.get("correo") or "").strip().lower(),
+                "Rol": (u.get("rol") or u.get("role") or "").strip().lower(),
+                "Empresa": empresa_de_usuario(u.get("correo", ""), usuarios_map),
+                "Activo": usuario_activo(u.get("correo", ""), usuarios_map),
+            }
+            for u in usuarios_totales
+        ])
+
+        st.caption("Usuarios con estado ‘Inactivo’ no podrán autenticarse con su correo hasta ser reactivados.")
+
+        estado_msg = st.session_state.pop("_admin_baja_msg", None)
+        if estado_msg:
+            st.success(estado_msg)
+
+        roles_disponibles = sorted({row["Rol"] for row in df_usuarios.to_dict("records")})
+        rol_filtro = st.selectbox(
+            "Filtrar por rol",
+            ["todos"] + roles_disponibles,
+            format_func=lambda r: "Todos" if r == "todos" else r.title(),
+        )
+
+        busqueda = st.text_input("Buscar por nombre o correo", placeholder="Ej: juan@motion.cl")
+        solo_inactivos = st.checkbox("Mostrar solo usuarios inactivos", value=False)
+
+        registros = df_usuarios.to_dict("records")
+        registros_filtrados: List[Dict[str, Any]] = []
+        for row in registros:
+            if rol_filtro != "todos" and row["Rol"] != rol_filtro:
+                continue
+            if solo_inactivos and row["Activo"]:
+                continue
+            if busqueda:
+                busc = busqueda.strip().lower()
+                if busc not in (row["Nombre"] or "").lower() and busc not in (row["Correo"] or "").lower():
+                    continue
+            registros_filtrados.append(row)
+
+        if not registros_filtrados:
+            st.info("No se encontraron usuarios para los filtros seleccionados.")
+        else:
+            for idx, row in enumerate(registros_filtrados):
+                correo_sel = row["Correo"]
+                usuario_sel = usuarios_map.get(correo_sel)
+                if not usuario_sel:
+                    continue
+
+                activo_actual = usuario_activo(correo_sel, usuarios_map)
+                empresa_usr = empresa_de_usuario(correo_sel, usuarios_map)
+                cols = st.columns([4, 2, 1])
+                with cols[0]:
+                    st.markdown(
+                        f"**{row['Nombre']}**\n\n"
+                        f"`{correo_sel}`  ·  Rol: {row['Rol'].title()}  ·  Empresa: {empresa_usr.title() if empresa_usr else '—'}"
+                    )
+                with cols[1]:
+                    estado_badge = "✅ Activo" if activo_actual else "⛔️ Inactivo"
+                    st.markdown(f"<div class='badge'>{estado_badge}</div>", unsafe_allow_html=True)
+                with cols[2]:
+                    accion = "Reactivar" if not activo_actual else "Dar de baja"
+                    if st.button(accion, key=f"toggle_{correo_sel}_{idx}"):
+                        set_usuario_activo(correo_sel, not activo_actual)
+                        st.session_state["_admin_baja_msg"] = (
+                            f"Usuario {'reactivado' if not activo_actual else 'dado de baja'} correctamente."
+                        )
+                        st.cache_data.clear()
+                        _trigger_rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
     st.caption("Agrupa clientes por entrenador (correo en la rutina) y muestra su última semana planificada.")
     ver_diag = st.checkbox("🔎 Ver diagnóstico de búsquedas", value=False)
-
-    mapa_entrenadores = _mapear_entrenadores()
     usuarios = _cargar_usuarios_deportistas()
 
     filas: List[Dict[str, Any]] = []   # clientes con rutina
