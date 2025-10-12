@@ -10,7 +10,13 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-from app_core.utils import set_usuario_activo, empresa_de_usuario, usuario_activo, EMPRESA_DESCONOCIDA
+from app_core.utils import (
+    set_usuario_activo,
+    empresa_de_usuario,
+    usuario_activo,
+    EMPRESA_DESCONOCIDA,
+    _invalidate_usuario_cache,
+)
 
 # ========== Firebase: inicializar solo una vez ==========
 if not firebase_admin._apps:
@@ -70,6 +76,36 @@ def _parse_fecha_generic(d: Dict[str, Any]) -> Optional[datetime]:
         except Exception:
             pass
     return None
+
+
+def _set_empresa_usuario(correo: str, empresa: str) -> bool:
+    correo_norm = (correo or "").strip().lower()
+    if not correo_norm:
+        return False
+
+    doc_id = _normalizar_id_correo(correo_norm)
+    empresa_clean = (empresa or "").strip()
+
+    try:
+        if empresa_clean:
+            empresa_value = empresa_clean.lower()
+            payload = {
+                "empresa": empresa_value,
+                "empresa_id": empresa_value,
+            }
+        else:
+            payload = {
+                "empresa": firestore.DELETE_FIELD,
+                "empresa_id": firestore.DELETE_FIELD,
+            }
+
+        db.collection("usuarios").document(doc_id).set(payload, merge=True)
+        _invalidate_usuario_cache()
+        st.cache_data.clear()
+        return True
+    except Exception as exc:
+        st.error(f"No se pudo actualizar la empresa: {exc}")
+        return False
 
 
 # ========== Catálogos / mapas ==========
@@ -261,8 +297,10 @@ def ver_resumen_entrenadores():
         st.caption("Usuarios con estado ‘Inactivo’ no podrán autenticarse con su correo hasta ser reactivados.")
 
         estado_msg = st.session_state.pop("_admin_baja_msg", None)
-        if estado_msg:
-            st.success(estado_msg)
+        empresa_msg = st.session_state.pop("_admin_empresa_msg", None)
+        for msg in (estado_msg, empresa_msg):
+            if msg:
+                st.success(msg)
 
         roles_disponibles = sorted({row["Rol"] for row in df_usuarios.to_dict("records")})
         rol_filtro = st.selectbox(
@@ -275,6 +313,15 @@ def ver_resumen_entrenadores():
         solo_inactivos = st.checkbox("Mostrar solo usuarios inactivos", value=False)
 
         registros = df_usuarios.to_dict("records")
+        empresas_existentes = sorted(
+            {
+                row["Empresa"]
+                for row in registros
+                if isinstance(row.get("Empresa"), str)
+                and row["Empresa"].strip()
+                and row["Empresa"] != EMPRESA_DESCONOCIDA
+            }
+        )
         registros_filtrados: List[Dict[str, Any]] = []
         for row in registros:
             if rol_filtro != "todos" and row["Rol"] != rol_filtro:
@@ -292,18 +339,77 @@ def ver_resumen_entrenadores():
         else:
             for idx, row in enumerate(registros_filtrados):
                 correo_sel = row["Correo"]
-                usuario_sel = usuarios_map.get(correo_sel)
-                if not usuario_sel:
-                    continue
-
                 activo_actual = usuario_activo(correo_sel, usuarios_map)
                 empresa_usr = empresa_de_usuario(correo_sel, usuarios_map)
+                empresa_actual = (
+                    "" if not empresa_usr or empresa_usr == EMPRESA_DESCONOCIDA else empresa_usr
+                )
+
                 cols = st.columns([4, 2, 1])
                 with cols[0]:
                     st.markdown(
                         f"**{row['Nombre']}**\n\n"
                         f"`{correo_sel}`  ·  Rol: {row['Rol'].title()}  ·  Empresa: {empresa_usr.title() if empresa_usr else '—'}"
                     )
+
+                    option_new = "__empresa_nueva__"
+                    opciones_empresa = [""]
+                    opciones_empresa.extend(
+                        sorted(e for e in empresas_existentes if e != empresa_actual)
+                    )
+                    if empresa_actual and empresa_actual not in opciones_empresa:
+                        opciones_empresa.append(empresa_actual)
+                    opciones_empresa = sorted(set(opciones_empresa), key=lambda x: (x != "", x))
+                    opciones_empresa.append(option_new)
+
+                    def _fmt_empresa(val: str) -> str:
+                        if val == option_new:
+                            return "Agregar nueva…"
+                        if not val:
+                            return "Sin empresa"
+                        return val.title()
+
+                    indice = 0
+                    if empresa_actual and empresa_actual in opciones_empresa:
+                        indice = opciones_empresa.index(empresa_actual)
+
+                    select_key = f"empresa_sel_{correo_sel}_{idx}"
+                    empresa_select = st.selectbox(
+                        "Empresa",
+                        opciones_empresa,
+                        index=indice,
+                        format_func=_fmt_empresa,
+                        key=select_key,
+                    )
+
+                    if empresa_select == option_new:
+                        nueva_empresa = st.text_input(
+                            "Nueva empresa",
+                            key=f"empresa_new_{correo_sel}_{idx}",
+                            placeholder="Nombre de la empresa",
+                        )
+                        guardar_disabled = not nueva_empresa.strip()
+                        if st.button(
+                            "Guardar nueva empresa",
+                            key=f"empresa_save_new_{correo_sel}_{idx}",
+                            disabled=guardar_disabled,
+                        ):
+                            if _set_empresa_usuario(correo_sel, nueva_empresa.strip()):
+                                st.session_state["_admin_empresa_msg"] = "Empresa actualizada correctamente."
+                                _trigger_rerun()
+                    else:
+                        empresa_objetivo = empresa_select
+                        if empresa_objetivo != empresa_actual:
+                            etiqueta_btn = (
+                                "Asignar empresa" if empresa_objetivo else "Quitar empresa"
+                            )
+                            if st.button(
+                                etiqueta_btn,
+                                key=f"empresa_apply_{correo_sel}_{idx}",
+                            ):
+                                if _set_empresa_usuario(correo_sel, empresa_objetivo):
+                                    st.session_state["_admin_empresa_msg"] = "Empresa actualizada correctamente."
+                                    _trigger_rerun()
                 with cols[1]:
                     estado_badge = "✅ Activo" if activo_actual else "⛔️ Inactivo"
                     st.markdown(f"<div class='badge'>{estado_badge}</div>", unsafe_allow_html=True)

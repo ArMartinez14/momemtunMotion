@@ -2,6 +2,7 @@
 import streamlit as st
 import extra_streamlit_components as stx
 import streamlit.components.v1 as components
+from textwrap import dedent
 from firebase_login import firebase_login_ui
 from auth_guard import ensure_user_session, is_token_expired
 
@@ -12,52 +13,79 @@ def login_barrier(cookie_name: str = "fb_idtoken") -> bool:
     st.subheader("Autenticación")
     cookie_manager = get_cookie_manager()
 
-    script = f"""
-    <script>
-    (function() {{
-      const cookieName = "{cookie_name}";
-      const maxAgeDays = 7;
-      function setCookieFromToken(token) {{
-        if (!token) {{
-          return;
-        }}
-        const expires = new Date(Date.now() + maxAgeDays * 24 * 60 * 60 * 1000).toUTCString();
-        const isHttps = window.location.protocol === "https:";
-        const sameSite = isHttps ? "SameSite=None" : "SameSite=Lax";
-        const secure = isHttps ? ";Secure" : "";
-        document.cookie = `${{cookieName}}=${{token}};expires=${{expires}};path=/;${{sameSite}}${{secure}}`;
-      }}
-      function propagateFromStorage() {{
-        try {{
-          const stored = window.localStorage.getItem("fb_idtoken");
-          if (stored) {{
-            setCookieFromToken(stored);
+    script = dedent(
+        """
+        <script>
+        (function() {{
+          const cookieName = "{cookie}";
+          const maxAgeDays = 7;
+
+          async function ensureStorageAccess() {{
+            if (!document.hasStorageAccess) {{
+              return;
+            }}
+            try {{
+              const hasAccess = await document.hasStorageAccess();
+              if (!hasAccess) {{
+                await document.requestStorageAccess();
+              }}
+            }} catch (err) {{
+              console.warn('Storage access request was rejected', err);
+            }}
           }}
-        }} catch (err) {{
-          console.warn("No se pudo leer localStorage", err);
-        }}
-      }}
-      window.addEventListener("message", (event) => {{
-        if (!event.data || event.data.type !== "fb_idtoken" || !event.data.token) {{
-          return;
-        }}
-        try {{
-          window.localStorage.setItem("fb_idtoken", event.data.token);
-        }} catch (err) {{
-          console.warn("No se pudo persistir token en localStorage", err);
-        }}
-        setCookieFromToken(event.data.token);
-      }});
-      propagateFromStorage();
-      document.addEventListener("visibilitychange", () => {{
-        if (!document.hidden) {{
-          propagateFromStorage();
-        }}
-      }});
-      setInterval(propagateFromStorage, 1500);
-    }})();
-    </script>
-    """
+
+          function setCookieFromToken(token) {{
+            if (!token) {{
+              return;
+            }}
+            const expires = new Date(Date.now() + maxAgeDays * 24 * 60 * 60 * 1000).toUTCString();
+            const isHttps = window.location.protocol === 'https:';
+            const sameSite = isHttps ? 'SameSite=None' : 'SameSite=Lax';
+            const secureAttr = isHttps ? ';Secure' : '';
+            document.cookie = `${{cookieName}}=${{token}};expires=${{expires}};path=/;${{sameSite}}${{secureAttr}}`;
+          }}
+
+          async function propagateFromStorage() {{
+            try {{
+              await ensureStorageAccess();
+              const stored = window.localStorage.getItem('fb_idtoken');
+              if (stored) {{
+                setCookieFromToken(stored);
+              }}
+            }} catch (err) {{
+              console.warn('No se pudo leer localStorage', err);
+            }}
+          }}
+
+          window.addEventListener('message', async (event) => {{
+            if (!event.data || event.data.type !== 'fb_idtoken' || !event.data.token) {{
+              return;
+            }}
+            try {{
+              await ensureStorageAccess();
+              window.localStorage.setItem('fb_idtoken', event.data.token);
+            }} catch (err) {{
+              console.warn('No se pudo persistir token en localStorage', err);
+            }}
+            setCookieFromToken(event.data.token);
+          }});
+
+          (async () => {{
+            await propagateFromStorage();
+          }})();
+
+          document.addEventListener('visibilitychange', () => {{
+            if (!document.hidden) {{
+              propagateFromStorage();
+            }}
+          }});
+
+          setInterval(propagateFromStorage, 1500);
+        }})();
+        </script>
+        """
+    ).format(cookie=cookie_name)
+
     components.html(script, height=0)
 
     if st.session_state.pop("auth_clear_cookie", False):

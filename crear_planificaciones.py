@@ -227,6 +227,10 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
     publico_flag = bool(payload_base.pop("publico_flag", False)) if _es_admin else False
 
     # ⚠️ Guardamos todas las claves que la UI usa aguas abajo
+    empresa_propietaria = ""
+    if _correo:
+        empresa_propietaria = empresa_de_usuario(_correo)
+
     meta = {
         "nombre": nombre_final,
         "video": payload_base.get("video", ""),
@@ -240,6 +244,7 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
         "buscable_id": slug_nombre(nombre_final),
         "publico": publico_flag,
         "entrenador": ("" if _es_admin else _correo),
+        "empresa_propietaria": empresa_propietaria,
         "updated_at": firestore.SERVER_TIMESTAMP,
         "created_at": firestore.SERVER_TIMESTAMP,
     }
@@ -254,7 +259,10 @@ def guardar_ejercicio_firestore(nombre_final: str, payload_base: dict) -> None:
 def _cargar_ejercicios_cached(correo_usuario: str, rol: str):
     db = get_db()
     correo_usuario = (correo_usuario or "").strip().lower()
-    es_admin = (rol or "").strip() in ADMIN_ROLES
+    rol = (rol or "").strip()
+    rol_lower = rol.lower()
+    es_admin = rol_lower in {r.lower() for r in ADMIN_ROLES}
+    empresa_usuario = empresa_de_usuario(correo_usuario) if correo_usuario else ""
 
     def _store(target: dict[str, dict], data: dict) -> None:
         nombre = (data.get("nombre") or "").strip()
@@ -269,21 +277,67 @@ def _cargar_ejercicios_cached(correo_usuario: str, rol: str):
                     continue
                 _store(ejercicios_por_nombre, doc.to_dict() or {})
         else:
+            empresa_cache: dict[str, str] = {}
+
+            def _empresa_de_creador(correo_creador: str) -> str:
+                correo_creador = (correo_creador or "").strip().lower()
+                if not correo_creador:
+                    return ""
+                if correo_creador not in empresa_cache:
+                    try:
+                        empresa_cache[correo_creador] = empresa_de_usuario(correo_creador)
+                    except Exception:
+                        empresa_cache[correo_creador] = ""
+                return empresa_cache[correo_creador]
+
             publicos: dict[str, dict] = {}
             personales: dict[str, dict] = {}
-            for doc in db.collection("ejercicios").where("publico", "==", True).stream():
-                if not doc.exists:
-                    continue
-                _store(publicos, doc.to_dict() or {})
-            if correo_usuario:
-                for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+            compartidos: dict[str, dict] = {}
+
+            if empresa_usuario == EMPRESA_MOTION:
+                for doc in db.collection("ejercicios").stream():
                     if not doc.exists:
                         continue
                     data = doc.to_dict() or {}
-                    _store(personales, data)
-                    publicos.pop((data.get("nombre") or "").strip(), None)
-            ejercicios_por_nombre.update(publicos)
-            ejercicios_por_nombre.update(personales)
+                    if not data:
+                        continue
+                    nombre = (data.get("nombre") or "").strip()
+                    if not nombre:
+                        continue
+                    es_publico = bool(data.get("publico"))
+                    creador = (data.get("entrenador") or "").strip().lower()
+
+                    if es_publico:
+                        _store(publicos, data)
+                        continue
+
+                    if creador and creador == correo_usuario:
+                        _store(personales, data)
+                        continue
+
+                    empresa_doc = (data.get("empresa_propietaria") or "").strip().lower()
+                    if not empresa_doc:
+                        empresa_doc = _empresa_de_creador(creador)
+
+                    if empresa_doc == EMPRESA_MOTION:
+                        _store(compartidos, data)
+                ejercicios_por_nombre.update(publicos)
+                ejercicios_por_nombre.update(compartidos)
+                ejercicios_por_nombre.update(personales)
+            else:
+                for doc in db.collection("ejercicios").where("publico", "==", True).stream():
+                    if not doc.exists:
+                        continue
+                    _store(publicos, doc.to_dict() or {})
+                if correo_usuario:
+                    for doc in db.collection("ejercicios").where("entrenador", "==", correo_usuario).stream():
+                        if not doc.exists:
+                            continue
+                        data = doc.to_dict() or {}
+                        _store(personales, data)
+                        publicos.pop((data.get("nombre") or "").strip(), None)
+                ejercicios_por_nombre.update(publicos)
+                ejercicios_por_nombre.update(personales)
     except Exception as e:
         st.error(f"Error cargando ejercicios: {e}")
     return ejercicios_por_nombre
