@@ -35,9 +35,14 @@ def _viewport_mode() -> str:
         (function() {
           const mode = window.innerWidth >= 1024 ? 'desktop' : 'mobile';
           const params = new URLSearchParams(window.location.search);
-          if (params.get('device') !== mode && window?.parent) {
+          if (params.get('device') !== mode) {
             params.set('device', mode);
-            window.parent.postMessage({type: 'streamlit:setQueryParams', queryParams: Object.fromEntries(params.entries())}, '*');
+            const payload = {
+              isStreamlitMessage: true,
+              type: 'streamlit:setQueryParams',
+              queryParams: Object.fromEntries(params.entries()),
+            };
+            (window.parent || window).postMessage(payload, '*');
           }
         })();
         </script>
@@ -48,8 +53,9 @@ def _viewport_mode() -> str:
     if isinstance(qp, list):
         qp = qp[0] if qp else None
     if qp in ("desktop", "mobile"):
+        st.session_state["_viewport_mode_cache"] = qp
         return qp
-    return "desktop"
+    return st.session_state.get("_viewport_mode_cache", "desktop")
 
 
 def _menu_groups(opciones_menu: list[str]) -> list[dict[str, object]]:
