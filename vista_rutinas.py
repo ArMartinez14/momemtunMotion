@@ -1075,6 +1075,7 @@ def ver_rutinas():
                 )
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
+                st.session_state.pop("_cliente_sel", None)
                 st.session_state.pop("dia_sel", None)
                 _sync_rutinas_query_params()
                 st.rerun()
