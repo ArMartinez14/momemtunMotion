@@ -172,58 +172,66 @@ def _render_navigation(opciones_menu: list[str], menu_actual: str) -> None:
             (g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"]),
             grupos[0]["label"],
         )
-        etiquetas_grupo = [g["label"] for g in grupos]
-        idx_defecto = etiquetas_grupo.index(grupo_label_actual) if grupo_label_actual in etiquetas_grupo else 0
+        etiqueta_item_actual = menu_actual if menu_actual else "Selecciona una sección"
 
-        grupo_label_sel = st.selectbox(
-            "Categoría",
-            etiquetas_grupo,
-            index=idx_defecto,
-            key="nav_mobile_group_select",
-            label_visibility="collapsed",
+        st.markdown(
+            f"""
+            <div style='text-align:center;'>
+              <div style='font-size:0.75rem; text-transform:uppercase; letter-spacing:0.14em; color:rgba(255,251,249,0.72);'>
+                {grupo_label_actual}
+              </div>
+              <div style='font-weight:700; font-size:1.08rem; color:#FFFBF9; letter-spacing:0.05em;'>
+                {etiqueta_item_actual}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        grupo_seleccionado = next((g for g in grupos if g["label"] == grupo_label_sel), grupos[0])
-        if grupo_seleccionado["id"] != st.session_state["_nav_group"]:
-            st.session_state["_nav_group"] = grupo_seleccionado["id"]
-            st.session_state["_nav_item_idx"] = 0
-            if grupo_seleccionado["items"]:
-                _goto(grupo_seleccionado["items"][0])
-                st.markdown("</div>", unsafe_allow_html=True)
-                return
+        with st.expander("Cambiar sección", expanded=False):
+            etiquetas_grupo = [g["label"] for g in grupos]
+            idx_defecto = etiquetas_grupo.index(grupo_label_actual) if grupo_label_actual in etiquetas_grupo else 0
 
-        items = grupo_seleccionado["items"]
-
-        if items and menu_actual not in items:
-            st.session_state["_nav_item_idx"] = 0
-            _goto(items[0])
-            st.markdown("</div>", unsafe_allow_html=True)
-            return
-
-        if items:
-            idx_item_actual = items.index(menu_actual) if menu_actual in items else 0
-            opcion_sel = st.selectbox(
-                "Sección",
-                items,
-                index=idx_item_actual,
-                key=f"nav_mobile_item_select_{grupo_seleccionado['id']}",
+            grupo_label_sel = st.radio(
+                "Categoría",
+                etiquetas_grupo,
+                index=idx_defecto,
+                key="nav_mobile_group_radio",
                 label_visibility="collapsed",
             )
 
-            if opcion_sel != menu_actual:
-                st.session_state["_nav_item_idx"] = items.index(opcion_sel)
-                _goto(opcion_sel)
+            grupo_seleccionado = next((g for g in grupos if g["label"] == grupo_label_sel), grupos[0])
+            if grupo_seleccionado["id"] != st.session_state["_nav_group"]:
+                st.session_state["_nav_group"] = grupo_seleccionado["id"]
+                st.session_state["_nav_item_idx"] = 0
+                if grupo_seleccionado["items"]:
+                    _goto(grupo_seleccionado["items"][0])
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    return
+
+            items = grupo_seleccionado["items"]
+
+            if items and menu_actual not in items:
+                st.session_state["_nav_item_idx"] = 0
+                _goto(items[0])
                 st.markdown("</div>", unsafe_allow_html=True)
                 return
 
-            st.markdown(
-                f"""
-                <div style='text-align:center; font-weight:700; font-size:1.05rem; color:#FFFBF9; letter-spacing:0.08em;'>
-                  {opcion_sel}
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if items:
+                idx_item_actual = items.index(menu_actual) if menu_actual in items else 0
+                opcion_sel = st.radio(
+                    "Sección",
+                    items,
+                    index=idx_item_actual,
+                    key=f"nav_mobile_item_radio_{grupo_seleccionado['id']}",
+                    label_visibility="collapsed",
+                )
+
+                if opcion_sel != menu_actual:
+                    st.session_state["_nav_item_idx"] = items.index(opcion_sel)
+                    _goto(opcion_sel)
+                    st.markdown("</div>", unsafe_allow_html=True)
+                    return
 
         st.markdown("</div>", unsafe_allow_html=True)
 
