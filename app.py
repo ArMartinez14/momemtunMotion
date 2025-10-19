@@ -167,35 +167,64 @@ def _render_navigation(opciones_menu: list[str], menu_actual: str) -> None:
 
     with st.container():
         st.markdown("<div class='nav-mobile'>", unsafe_allow_html=True)
-        grupo_label = next(g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"])
-        st.markdown(
-            f"""
-            <div style='text-align:center; font-weight:700; font-size:1.05rem; color:#FFFBF9; letter-spacing:0.08em;'>
-              {grupo_label}
-            </div>
-            """,
-            unsafe_allow_html=True,
+
+        grupo_label_actual = next(
+            (g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"]),
+            grupos[0]["label"],
+        )
+        etiquetas_grupo = [g["label"] for g in grupos]
+        idx_defecto = etiquetas_grupo.index(grupo_label_actual) if grupo_label_actual in etiquetas_grupo else 0
+
+        grupo_label_sel = st.selectbox(
+            "Categoría",
+            etiquetas_grupo,
+            index=idx_defecto,
+            key="nav_mobile_group_select",
+            label_visibility="collapsed",
         )
 
-        if items:
-            st.markdown("<div class='nav-mobile__items'>", unsafe_allow_html=True)
-            rows = [items[i:i + 3] for i in range(0, len(items), 3)]
-            for chunk in rows:
-                cols_chunk = st.columns(len(chunk), gap="small")
-                for col, opcion in zip(cols_chunk, chunk):
-                    with col:
-                        activo = opcion == menu_actual
-                        if st.button(
-                            opcion,
-                            key=f"nav_mobile_item_{opcion}",
-                            type="primary" if activo else "secondary",
-                            use_container_width=True,
-                        ):
-                            st.session_state["_nav_item_idx"] = items.index(opcion)
-                            if not activo:
-                                _goto(opcion)
-                                return
+        grupo_seleccionado = next((g for g in grupos if g["label"] == grupo_label_sel), grupos[0])
+        if grupo_seleccionado["id"] != st.session_state["_nav_group"]:
+            st.session_state["_nav_group"] = grupo_seleccionado["id"]
+            st.session_state["_nav_item_idx"] = 0
+            if grupo_seleccionado["items"]:
+                _goto(grupo_seleccionado["items"][0])
+                st.markdown("</div>", unsafe_allow_html=True)
+                return
+
+        items = grupo_seleccionado["items"]
+
+        if items and menu_actual not in items:
+            st.session_state["_nav_item_idx"] = 0
+            _goto(items[0])
             st.markdown("</div>", unsafe_allow_html=True)
+            return
+
+        if items:
+            idx_item_actual = items.index(menu_actual) if menu_actual in items else 0
+            opcion_sel = st.selectbox(
+                "Sección",
+                items,
+                index=idx_item_actual,
+                key=f"nav_mobile_item_select_{grupo_seleccionado['id']}",
+                label_visibility="collapsed",
+            )
+
+            if opcion_sel != menu_actual:
+                st.session_state["_nav_item_idx"] = items.index(opcion_sel)
+                _goto(opcion_sel)
+                st.markdown("</div>", unsafe_allow_html=True)
+                return
+
+            st.markdown(
+                f"""
+                <div style='text-align:center; font-weight:700; font-size:1.05rem; color:#FFFBF9; letter-spacing:0.08em;'>
+                  {opcion_sel}
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
         st.markdown("</div>", unsafe_allow_html=True)
 
 # 2) Soft login (usa el módulo que ya probaste)
