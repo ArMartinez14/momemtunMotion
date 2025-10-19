@@ -74,9 +74,9 @@ COLUMNAS_TABLA = [
 ]
 
 CIRCUITOS = ["A","B","C","D","E","F","G","H","I","J","K","L"]
-COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8]
+COL_SIZES = [0.9, 2.0, 3.0, 2.0, 0.8, 1.6, 1.0, 0.8, 1.2, 0.8, 0.7]
 HEADERS   = ["Circuito", "Buscar Ejercicio", "Ejercicio", "Detalle",
-             "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar"]
+             "Series", "Repeticiones", "Peso", "RIR", "Progresión", "Copiar", "Limpiar"]
 
 # ===================== 🔄 DÍAS =====================
 def claves_dias(rutina_dict: dict) -> list[str]:
@@ -157,6 +157,29 @@ def _fila_vacia(seccion: str) -> dict:
     base = {k: "" for k in COLUMNAS_TABLA}
     base["Sección"] = seccion
     return base
+
+
+def _reset_fila_en_section(key_seccion: str, fila_idx: int, seccion: str, key_entrenamiento: str) -> None:
+    filas = st.session_state.get(key_seccion)
+    if not isinstance(filas, list) or not (0 <= fila_idx < len(filas)):
+        return
+
+    filas[fila_idx] = _fila_vacia(seccion)
+
+    for pref in ("circ", "buscar", "select", "det", "ser", "rmin", "rmax", "peso", "rir"):
+        st.session_state.pop(f"{pref}_{key_entrenamiento}", None)
+
+    for p in (1, 2, 3):
+        st.session_state.pop(f"var{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"cant{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"ope{p}_{key_entrenamiento}_{fila_idx}", None)
+        st.session_state.pop(f"sem{p}_{key_entrenamiento}_{fila_idx}", None)
+
+    st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"copy_check_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"multiselect_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"do_copy_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"delete_{key_entrenamiento}_{fila_idx}", None)
 
 def _asegurar_dia_en_session(idx_dia: int):
     wu_key = f"rutina_dia_{idx_dia}_Warm_Up"
@@ -245,6 +268,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         return res
 
     with st.form(f"form_{key_seccion}", clear_on_submit=False):
+        filas_marcadas_para_borrar = []
         for idx, fila in enumerate(st.session_state[key_seccion]):
             key_entrenamiento = f"{i}_{seccion.replace(' ','_')}_{idx}"
             cols = st.columns(col_sizes)
@@ -401,6 +425,13 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 st.session_state.pop(f"multiselect_{key_entrenamiento}_{idx}", None)
                 st.session_state.pop(f"do_copy_{key_entrenamiento}_{idx}", None)
 
+            borrar_key = f"delete_{key_entrenamiento}_{idx}"
+            marcado_para_borrar = cols[10].checkbox("", key=borrar_key)
+            if marcado_para_borrar:
+                filas_marcadas_para_borrar.append((idx, key_entrenamiento))
+            else:
+                st.session_state.pop(f"delete_{key_entrenamiento}_{idx}", None)
+
         action_cols = st.columns([1,5,1], gap="small")
         with action_cols[0]:
             submitted = st.form_submit_button("Actualizar sección", type="primary")
@@ -410,7 +441,13 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         pending_key = f"pending_clear_{key_seccion}"
 
         if limpiar_clicked:
-            if st.session_state.get(pending_key):
+            if filas_marcadas_para_borrar:
+                for idx_sel, key_sel in filas_marcadas_para_borrar:
+                    _reset_fila_en_section(key_seccion, idx_sel, seccion, key_sel)
+                st.session_state.pop(pending_key, None)
+                st.success("Fila(s) limpiadas ✅")
+                st.rerun()
+            elif st.session_state.get(pending_key):
                 fila_vacia = _fila_vacia(seccion)
                 fila_vacia["BuscarEjercicio"] = ""
                 fila_vacia["Ejercicio"] = ""
@@ -420,13 +457,17 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 for key in list(st.session_state.keys()):
                     if key.startswith(f"multiselect_{prefix}") or key.startswith(f"do_copy_{prefix}"):
                         st.session_state.pop(key, None)
+                    if key.startswith(f"delete_{prefix}"):
+                        st.session_state.pop(key, None)
+                    if key.startswith(f"copy_check_{prefix}") or key.startswith(f"prog_check_{prefix}"):
+                        st.session_state.pop(key, None)
                 st.session_state.pop(pending_key, None)
                 st.success("Sección limpiada ✅")
                 st.rerun()
             else:
                 st.session_state[pending_key] = True
 
-        if st.session_state.get(pending_key):
+        if st.session_state.get(pending_key) and not filas_marcadas_para_borrar:
             st.warning("Vuelve a presionar **Limpiar sección** para confirmar el borrado.")
 
         if submitted:

@@ -936,6 +936,18 @@ def ver_rutinas():
                     if coach_resp_cli == correo_raw:
                         clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
+            elif es_motion_entrenador:
+                clientes_tarjetas = []
+                for r in rutinas_all:
+                    nombre_cli = (r.get("cliente") or "").strip()
+                    if not nombre_cli:
+                        continue
+                    correo_cli = (r.get("correo") or "").strip().lower()
+                    datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                    coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                    if coach_resp_cli == correo_raw:
+                        clientes_tarjetas.append(nombre_cli)
+                clientes_tarjetas = sorted(set(clientes_tarjetas))
             else:
                 clientes_tarjetas = []
                 for r in rutinas_all:
@@ -947,23 +959,25 @@ def ver_rutinas():
                     correo_cli = (r.get("correo") or "").strip().lower()
                     datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
                     coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
-                    empresa_cli = empresa_de_usuario(correo_cli, usuarios_por_correo) if correo_cli else ""
-                    if es_motion_entrenador:
-                        if (
-                            entrenador_reg in correos_entrenador
-                            or entrenador_reg_norm in correos_entrenador
-                            or coach_resp_cli == correo_raw
-                            or empresa_cli in {EMPRESA_MOTION, EMPRESA_DESCONOCIDA}
-                        ):
-                            clientes_tarjetas.append(nombre_cli)
-                    else:
-                        if (
-                            entrenador_reg in correos_entrenador
-                            or entrenador_reg_norm in correos_entrenador
-                            or coach_resp_cli == correo_raw
-                        ):
-                            clientes_tarjetas.append(nombre_cli)
+                    if (
+                        entrenador_reg in correos_entrenador
+                        or entrenador_reg_norm in correos_entrenador
+                        or coach_resp_cli == correo_raw
+                    ):
+                        clientes_tarjetas.append(nombre_cli)
                 clientes_tarjetas = sorted(set(clientes_tarjetas))
+        elif rol_lower in ("admin", "administrador") and es_motion_entrenador:
+            clientes_tarjetas = []
+            for r in rutinas_all:
+                nombre_cli = (r.get("cliente") or "").strip()
+                if not nombre_cli:
+                    continue
+                correo_cli = (r.get("correo") or "").strip().lower()
+                datos_cli = usuarios_por_correo.get(correo_cli) or usuarios_por_correo.get(normalizar_correo(correo_cli)) or {}
+                coach_resp_cli = (datos_cli.get("coach_responsable") or "").strip().lower()
+                if coach_resp_cli == correo_raw:
+                    clientes_tarjetas.append(nombre_cli)
+            clientes_tarjetas = sorted(set(clientes_tarjetas))
         else:
             clientes_tarjetas = sorted(clientes_empresa_info.keys())
 
@@ -974,7 +988,12 @@ def ver_rutinas():
         busqueda_lower = busqueda.lower()
         clientes_asignados = clientes_tarjetas
 
-        base_lista = clientes_tarjetas if clientes_tarjetas else sorted(clientes_empresa_info.keys())
+        if clientes_tarjetas:
+            base_lista = clientes_tarjetas
+        elif es_motion_entrenador and rol_lower in ("entrenador", "admin", "administrador"):
+            base_lista = []
+        else:
+            base_lista = sorted(clientes_empresa_info.keys())
 
         if busqueda_lower:
             candidatos = [
@@ -1032,14 +1051,28 @@ def ver_rutinas():
                             _sync_rutinas_query_params(cliente_nombre)
                             st.rerun()
         else:
-            st.markdown(
-                f"""
-                <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
-                  <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+            if rol in ("entrenador", "admin", "administrador"):
+                st.markdown(
+                    f"""
+                    <div class='client-sticky'>
+                      <div class='client-sticky__label'>Deportista seleccionado</div>
+                      <div class='client-sticky__value'>
+                        {cliente_sel}
+                        <span class='client-sticky__badge'>Rutina activa</span>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div class='card' style='border: 1.5px solid var(--primary); padding:14px; display:flex; flex-direction:column; gap:6px;'>
+                      <div style='font-weight:700; font-size:1.05rem;'>{cliente_sel}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
                 st.session_state.pop("dia_sel", None)

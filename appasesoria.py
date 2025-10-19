@@ -217,6 +217,10 @@ if menu_actual not in opciones_menu:
     menu_actual = opciones_menu[0]
     st.session_state["menu_radio"] = menu_actual
 
+last_menu = st.session_state.get("_last_menu")
+menu_cambio = last_menu != menu_actual
+st.session_state["_last_menu"] = menu_actual
+
 _sync_menu_query_param(menu_actual)
 
 header = st.container()
@@ -276,7 +280,8 @@ if opcion == "Inicio":
     inicio_deportista()   # ← SIEMPRE aterriza en Inicio
 
 elif opcion == "Ver Rutinas":
-    st.session_state.pop("dia_sel", None)   # opcional
+    if menu_cambio:
+        st.session_state.pop("dia_sel", None)
     ver_rutinas()
 
 elif opcion == "Crear Rutinas":

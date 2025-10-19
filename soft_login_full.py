@@ -38,6 +38,132 @@ _KILL_TS_KEY      = "_softlogin_kill_ts"        # marca de logout
 _COOKIE_TS_FIELD  = "ts"                        # campo "ts" en la cookie
 _PAYLOAD_KEY      = "_softlogin_payload"        # último payload persistido
 _REMEMBER_KEY     = "_softlogin_remember"       # preferencia de recordarme
+_UI_STATE_KEY     = "ui_state"                  # snapshot liviano de estado de UI
+_UI_RESTORED_FLAG = "_softlogin_ui_restored"    # evita rehidratar varias veces en la misma sesión
+
+# Qué versiones usamos para evolucionar el formato sin romper sesiones previas
+_UI_STATE_VERSION = 1
+
+
+def _role_bucket(role: str | None) -> str | None:
+    """Agrupa roles equivalentes para persistir/restaurar estado contextual."""
+    if not role:
+        return None
+    role_key = str(role).strip().lower()
+    if role_key in ("entrenador", "admin", "administrador"):
+        return "entrenador"
+    if role_key == "deportista":
+        return "deportista"
+    return None
+
+
+def _collect_persisted_ui_state(role: str | None) -> dict:
+    """Obtiene un snapshot acotado del estado que queremos recordar entre sesiones."""
+    snapshot: dict[str, object] = {"version": _UI_STATE_VERSION}
+
+    menu_actual = st.session_state.get("menu_radio")
+    if isinstance(menu_actual, str) and menu_actual:
+        snapshot["menu_radio"] = menu_actual
+
+    bucket = _role_bucket(role)
+    role_payload: dict[str, object] = {}
+    if bucket == "entrenador":
+        cliente_sel = st.session_state.get("_cliente_sel")
+        if isinstance(cliente_sel, str) and cliente_sel:
+            role_payload["_cliente_sel"] = cliente_sel
+
+        semana_sel = st.session_state.get("semana_sel")
+        if isinstance(semana_sel, str) and semana_sel:
+            role_payload["semana_sel"] = semana_sel
+
+        dia_sel = st.session_state.get("dia_sel")
+        if isinstance(dia_sel, (str, int)) and dia_sel != "":
+            role_payload["dia_sel"] = str(dia_sel)
+
+        mostrar_lista = st.session_state.get("_mostrar_lista_clientes")
+        if isinstance(mostrar_lista, bool):
+            role_payload["_mostrar_lista_clientes"] = mostrar_lista
+
+    elif bucket == "deportista":
+        semana_sel = st.session_state.get("semana_sel")
+        if isinstance(semana_sel, str) and semana_sel:
+            role_payload["semana_sel"] = semana_sel
+
+        dia_sel = st.session_state.get("dia_sel")
+        if isinstance(dia_sel, (str, int)) and dia_sel != "":
+            role_payload["dia_sel"] = str(dia_sel)
+
+    if role_payload and bucket:
+        snapshot["role_state"] = {bucket: role_payload}
+
+    # Si sólo tenemos la versión (sin datos útiles) retornamos dict vacío
+    if len(snapshot) == 1 and "version" in snapshot:
+        return {}
+    return snapshot
+
+
+def _restore_persisted_ui_state(role: str | None, state: object) -> bool:
+    """Rehidrata el estado persistido. Devuelve True si se sembró algo."""
+    if not isinstance(state, dict):
+        return False
+
+    restored = False
+
+    menu_guardado = state.get("menu_radio")
+    if isinstance(menu_guardado, str) and menu_guardado and "menu_radio" not in st.session_state:
+        st.session_state["menu_radio"] = menu_guardado
+        restored = True
+
+    bucket = _role_bucket(role)
+    if not bucket:
+        return restored
+
+    role_state = None
+    role_state_map = state.get("role_state")
+    if isinstance(role_state_map, dict):
+        role_state = role_state_map.get(bucket)
+
+    # Compatibilidad: si antes guardábamos plano, tomar de raíz
+    if role_state is None:
+        role_state = state
+
+    if not isinstance(role_state, dict):
+        return restored
+
+    def _seed_if_absent(key: str, value: object):
+        nonlocal restored
+        if value is None or key in st.session_state:
+            return
+        st.session_state[key] = value
+        restored = True
+
+    if bucket == "entrenador":
+        cliente_sel = role_state.get("_cliente_sel")
+        if isinstance(cliente_sel, str) and cliente_sel:
+            _seed_if_absent("_cliente_sel", cliente_sel)
+
+        semana_sel = role_state.get("semana_sel")
+        if isinstance(semana_sel, str) and semana_sel:
+            _seed_if_absent("semana_sel", semana_sel)
+
+        dia_sel = role_state.get("dia_sel")
+        if isinstance(dia_sel, (str, int)) and str(dia_sel):
+            _seed_if_absent("dia_sel", str(dia_sel))
+
+        mostrar_lista = role_state.get("_mostrar_lista_clientes")
+        if isinstance(mostrar_lista, bool):
+            _seed_if_absent("_mostrar_lista_clientes", mostrar_lista)
+
+    elif bucket == "deportista":
+        semana_sel = role_state.get("semana_sel")
+        if isinstance(semana_sel, str) and semana_sel:
+            _seed_if_absent("semana_sel", semana_sel)
+
+        dia_sel = role_state.get("dia_sel")
+        if isinstance(dia_sel, (str, int)) and str(dia_sel):
+            _seed_if_absent("dia_sel", str(dia_sel))
+
+    return restored
 
 # =========================
 # Helpers de URL (respaldo móvil)
@@ -326,6 +452,10 @@ def _hydrate_from_cookie():
 
         st.session_state[_PAYLOAD_KEY] = data
         st.session_state[_REMEMBER_KEY] = remember_flag
+
+        if not st.session_state.get(_UI_RESTORED_FLAG):
+            if _restore_persisted_ui_state(st.session_state.get("rol"), data.get(_UI_STATE_KEY)):
+                st.session_state[_UI_RESTORED_FLAG] = True
         st.session_state[_BOOTSTRAP_FLAG] = True
         return cm
 
@@ -371,6 +501,13 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
         })
         ttl_pref = REMEMBER_TTL_SECONDS if remember_flag else ttl_seconds
         payload["ttl"] = ttl_pref
+
+        ui_state = _collect_persisted_ui_state(payload.get("rol"))
+        if ui_state:
+            payload[_UI_STATE_KEY] = ui_state
+        else:
+            payload.pop(_UI_STATE_KEY, None)
+
         if cm:
             _set_cookie(cm, payload, ttl_pref)
         else:
@@ -423,6 +560,9 @@ def soft_login_barrier(required_roles=None, titulo="Bienvenido", ttl_seconds: in
             "remember": remember_flag,
             "ttl": ttl,
         }
+        ui_state = _collect_persisted_ui_state(st.session_state.get("rol"))
+        if ui_state:
+            payload[_UI_STATE_KEY] = ui_state
         _set_cookie(cm, payload, ttl)
 
         st.rerun()
@@ -443,8 +583,12 @@ def soft_logout():
 
     # Limpia estado y caches
     for k in ["correo", "rol", "nombre", "primer_nombre",
+              "menu_radio", "_menu_target", "_last_menu",
+              "_mostrar_lista_clientes", "_cliente_sel",
+              "semana_sel", "dia_sel",
               _CACHE_TOKEN_KEY, _BOOTSTRAP_FLAG,
-              _PAYLOAD_KEY, _REMEMBER_KEY]:
+              _PAYLOAD_KEY, _REMEMBER_KEY,
+              _UI_RESTORED_FLAG]:
         st.session_state.pop(k, None)
 
     st.rerun()
