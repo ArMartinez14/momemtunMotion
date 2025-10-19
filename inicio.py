@@ -25,20 +25,20 @@ st.markdown(
     }
     .progress-fill {
         height: 100%;
-        background: linear-gradient(90deg, #22C55E 0%, #0EA5E9 100%);
+        background: linear-gradient(90deg, #D64045 0%, #C96B5D 100%);
     }
     div[data-testid="stButton"][data-key^="accion_"] button {
-        background: #0b1018 !important;
-        border: 1px solid rgba(56, 189, 248, 0.55) !important;
-        color: #e0f2fe !important;
+        background: rgba(32, 12, 11, 0.95) !important;
+        border: 1px solid rgba(226, 94, 80, 0.45) !important;
+        color: #FFEDEA !important;
         font-weight: 700 !important;
         border-radius: 12px !important;
-        box-shadow: 0 10px 25px rgba(14, 165, 233, 0.18);
+        box-shadow: 0 10px 25px rgba(226, 94, 80, 0.22);
         transition: transform 0.15s ease, box-shadow 0.15s ease;
     }
     div[data-testid="stButton"][data-key^="accion_"] button:hover {
         transform: translateY(-1px);
-        box-shadow: 0 14px 30px rgba(56, 189, 248, 0.25);
+        box-shadow: 0 14px 30px rgba(226, 94, 80, 0.28);
     }
     </style>
     """,
@@ -127,7 +127,7 @@ def _fecha_lunes_hoy() -> str:
     lunes = hoy - timedelta(days=hoy.weekday())
     return lunes.strftime("%Y-%m-%d")
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120, max_entries=256)
 def _rutinas_cliente_semana(_db, correo_raw: str):
     docs = _db.collection("rutinas_semanales").where("correo", "==", correo_raw).stream()
     out = []
@@ -136,7 +136,7 @@ def _rutinas_cliente_semana(_db, correo_raw: str):
         except: pass
     return out
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120, max_entries=256)
 def _rutinas_asignadas_a_entrenador(_db, correo_entrenador: str):
     """Todas las rutinas donde el campo 'entrenador' coincide con el correo del entrenador."""
     docs = _db.collection("rutinas_semanales").where("entrenador", "==", correo_entrenador).stream()
@@ -218,25 +218,13 @@ def _primero_pendiente(doc: dict) -> str | None:
     return None
 
 def _set_query_params(**params: str | None):
-    """Compatibilidad con Streamlit para limpiar/actualizar los query params."""
-    params = {k: v for k, v in params.items() if v is not None}
-    qp = None
+    """Actualiza los query params usando la API moderna de Streamlit."""
     try:
         qp = st.query_params
-    except Exception:
-        qp = None
-
-    if qp is not None:
-        try:
-            qp.clear()
-            if params:
-                qp.update(params)
-            return
-        except Exception:
-            pass
-
-    try:
-        st.experimental_set_query_params(**params)
+        qp.clear()
+        clean = {k: v for k, v in params.items() if v is not None}
+        if clean:
+            qp.update(clean)
     except Exception:
         pass
 
@@ -409,18 +397,6 @@ def inicio_deportista():
             unsafe_allow_html=True
         )
 
-        # 2) Acciones según rol (primero el menú)
-        acciones = _acciones_para_rol(rol)
-        if acciones:
-            st.markdown("### 🛠️ Tus herramientas")
-            cols = st.columns(3, gap="large")
-            for idx, accion in enumerate(acciones):
-                col = cols[idx % len(cols)]
-                with col:
-                    etiqueta = f"{accion['label']}"
-                    if st.button(etiqueta, key=f"accion_{accion['id']}", help=accion.get("help"), use_container_width=True, type="secondary"):
-                        accion["callback"]()
-
         st.markdown("---")
 
         # 3) Deportistas a mi cargo (entrenador == mi correo)
@@ -501,17 +477,17 @@ def inicio_deportista():
                         badge_html = (
                             "<div style='margin-top:10px;'>"
                             "<span style='display:inline-flex;align-items:center;padding:4px 12px;border-radius:14px;gap:6px;"
-                            "background:linear-gradient(135deg, rgba(59,130,246,0.18), rgba(37,99,235,0.2));"
-                            "color:#60a5fa;font-weight:600;font-size:0.82rem;'>"
+                            "background:linear-gradient(135deg, rgba(226,94,80,0.22), rgba(148,34,28,0.28));"
+                            "color:#FFE4DE;font-weight:600;font-size:0.82rem;'>"
                             "💬 Comentarios recientes"
-                            f"<span style='background:rgba(59,130,246,0.28); color:#1d4ed8; border-radius:999px; padding:2px 8px; font-size:0.72rem;'>{total_c}</span>"
+                            f"<span style='background:rgba(226,94,80,0.32); color:#FFD4CB; border-radius:999px; padding:2px 8px; font-size:0.72rem;'>{total_c}</span>"
                             "</span></div>"
                         )
                     fecha_badge = (
                         f"<span style='display:inline-flex;align-items:center;padding:4px 12px;border-radius:12px;gap:8px;"
-                        "background:linear-gradient(135deg, rgba(34,197,94,0.18), rgba(16,185,129,0.22));"
-                        "color:#064e3b;font-weight:600;font-size:0.82rem;letter-spacing:0.01em;'>"
-                        "<span style='background:rgba(22,163,74,0.22);padding:2px 8px;border-radius:999px;font-size:0.7rem;color:#047857;'>Última rutina</span>"
+                        "background:linear-gradient(135deg, rgba(226,94,80,0.24), rgba(120,24,20,0.28));"
+                        "color:#FFDCD6;font-weight:600;font-size:0.82rem;letter-spacing:0.01em;'>"
+                        "<span style='background:rgba(226,94,80,0.35);padding:2px 8px;border-radius:999px;font-size:0.7rem;color:#FFEDEA;'>Última rutina</span>"
                         f"<span>🗓️ {fecha_ult or '—'}</span>"
                         "</span>"
                     )

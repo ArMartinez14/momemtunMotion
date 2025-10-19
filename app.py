@@ -28,9 +28,76 @@ def _nav_button_key(label: str, suffix: int) -> str:
     return f"nav_{slug}_{suffix}"
 
 
+def _viewport_mode() -> str:
+    st.markdown(
+        """
+        <script>
+        (function() {
+          const mode = window.innerWidth >= 1024 ? 'desktop' : 'mobile';
+          const params = new URLSearchParams(window.location.search);
+          if (params.get('device') !== mode && window?.parent) {
+            params.set('device', mode);
+            window.parent.postMessage({type: 'streamlit:setQueryParams', queryParams: Object.fromEntries(params.entries())}, '*');
+          }
+        })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+    qp = st.query_params.get("device")
+    if isinstance(qp, list):
+        qp = qp[0] if qp else None
+    if qp in ("desktop", "mobile"):
+        return qp
+    return "desktop"
+
+
+def _menu_groups(opciones_menu: list[str]) -> list[dict[str, object]]:
+    grupos: list[dict[str, object]] = []
+    restantes = list(opciones_menu)
+    restantes_set = set(restantes)
+
+    def _agregar(grupo_id: str, etiqueta: str, items: list[str]):
+        disponibles = [op for op in items if op in restantes_set]
+        if not disponibles:
+            return
+        for op in disponibles:
+            restantes_set.discard(op)
+        grupos.append({"id": grupo_id, "label": etiqueta, "items": disponibles})
+
+    _agregar("inicio", "Inicio", ["Inicio"])
+    _agregar("rutinas", "Rutinas", [
+        "Ver Rutinas",
+        "Crear Rutinas",
+        "Editar Rutinas",
+        "Borrar Rutinas",
+        "Crear Descarga",
+    ])
+    _agregar("atletas", "Atletas", [
+        "Ingresar Deportista o Ejercicio",
+        "Ejercicios",
+    ])
+    _agregar("seguimiento", "Seguimiento", [
+        "Reportes",
+        SEGUIMIENTO_LABEL,
+    ])
+    _agregar("admin", "Administración", ["Resumen (Admin)"])
+
+    restantes_final = [op for op in restantes if op in restantes_set]
+    if restantes_final:
+        grupos.append({
+            "id": "otros",
+            "label": "Otros",
+            "items": restantes_final,
+        })
+    return grupos
+
+
 def _render_navigation(opciones_menu: list[str], menu_actual: str) -> None:
     if not opciones_menu:
         return
+
+    modo = _viewport_mode()
 
     st.markdown(
         """
@@ -41,23 +108,95 @@ def _render_navigation(opciones_menu: list[str], menu_actual: str) -> None:
         """,
         unsafe_allow_html=True,
     )
+    grupos = _menu_groups(opciones_menu)
+    if not grupos:
+        return
 
-    max_cols = 4
-    for idx in range(0, len(opciones_menu), max_cols):
-        fila = opciones_menu[idx: idx + max_cols]
-        cols = st.columns(len(fila), gap="small")
-        for col, opcion in zip(cols, fila):
-            with col:
-                activo = opcion == menu_actual
-                tipo = "primary" if activo else "secondary"
-                if st.button(
-                    opcion,
-                    key=_nav_button_key(opcion, idx),
-                    type=tipo,
-                    use_container_width=True,
-                ):
-                    if not activo:
-                        _goto(opcion)
+    grupo_actual_id = next((g["id"] for g in grupos if menu_actual in g["items"]), None)
+    grupo_ids = [g["id"] for g in grupos]
+    grupo_sel = st.session_state.get("_nav_group")
+    if grupo_sel not in grupo_ids:
+        grupo_sel = grupo_actual_id or grupos[0]["id"]
+    st.session_state["_nav_group"] = grupo_sel
+
+    grupo_activo = next((g for g in grupos if g["id"] == grupo_sel), grupos[0])
+    items = grupo_activo["items"]
+    if menu_actual in items:
+        st.session_state["_nav_item_idx"] = items.index(menu_actual)
+    elif st.session_state.get("_nav_item_idx") is None or st.session_state.get("_nav_item_idx") >= len(items):
+        st.session_state["_nav_item_idx"] = 0
+
+    if modo == "desktop":
+        with st.container():
+            st.markdown("<div class='nav-desktop'>", unsafe_allow_html=True)
+            cols_groups = st.columns(len(grupos), gap="small")
+            for col, grupo in zip(cols_groups, grupos):
+                with col:
+                    activo = grupo["id"] == st.session_state["_nav_group"]
+                    if st.button(
+                        grupo["label"],
+                        key=f"nav_desktop_group_{grupo['id']}",
+                        type="primary" if activo else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_nav_group"] = grupo["id"]
+                        st.session_state["_nav_item_idx"] = 0
+                        if menu_actual not in grupo["items"] and grupo["items"]:
+                            _goto(grupo["items"][0])
+                            st.markdown("</div>", unsafe_allow_html=True)
+                            return
+
+            if items:
+                cols_items = st.columns(len(items), gap="small")
+                for col, opcion in zip(cols_items, items):
+                    with col:
+                        activo = opcion == menu_actual
+                        if st.button(
+                            opcion,
+                            key=f"nav_desktop_item_{opcion}",
+                            type="primary" if activo else "secondary",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_nav_item_idx"] = items.index(opcion)
+                            if not activo:
+                                _goto(opcion)
+                                st.markdown("</div>", unsafe_allow_html=True)
+                                return
+            st.markdown("</div>", unsafe_allow_html=True)
+        return
+
+    with st.container():
+        st.markdown("<div class='nav-mobile'>", unsafe_allow_html=True)
+        grupo_label = next(g["label"] for g in grupos if g["id"] == st.session_state["_nav_group"])
+        st.markdown(
+            f"""
+            <div style='text-align:center; font-weight:700; font-size:1.05rem; color:#FFFBF9; letter-spacing:0.08em;'>
+              {grupo_label}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+        if items:
+            st.markdown("<div class='nav-mobile__items'>", unsafe_allow_html=True)
+            rows = [items[i:i + 3] for i in range(0, len(items), 3)]
+            for chunk in rows:
+                cols_chunk = st.columns(len(chunk), gap="small")
+                for col, opcion in zip(cols_chunk, chunk):
+                    with col:
+                        activo = opcion == menu_actual
+                        if st.button(
+                            opcion,
+                            key=f"nav_mobile_item_{opcion}",
+                            type="primary" if activo else "secondary",
+                            use_container_width=True,
+                        ):
+                            st.session_state["_nav_item_idx"] = items.index(opcion)
+                            if not activo:
+                                _goto(opcion)
+                                return
+            st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # 2) Soft login (usa el módulo que ya probaste)
 from soft_login_full import soft_login_barrier, soft_logout
@@ -178,54 +317,55 @@ with header:
         </div>
     """
 
-    top_cols = st.columns([3, 2], gap="large")
-    with top_cols[0]:
+    left_col, right_col = st.columns([3, 2], gap="large")
+    with left_col:
         st.markdown(hero_html, unsafe_allow_html=True)
 
-    with top_cols[1]:
-        session_html = f"""
-            <div class='session-card'>
-              <span class='session-card__label'>Correo activo</span>
-              <span class='session-card__value'>{email or 'Sin correo'}</span>
-            </div>
-        """
-        st.markdown(session_html, unsafe_allow_html=True)
+    with right_col:
+        st.markdown(
+            f"""
+            <div style='color:rgba(240,232,228,0.76); text-transform:uppercase; font-size:0.72rem; letter-spacing:0.12em; margin-bottom:6px;'>Correo activo</div>
+            <div style='font-size:0.95rem; font-weight:600; color:#FFFBF9;'>{email or 'Sin correo'}</div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    mostrar_back = menu_actual != "Inicio"
-    action_cols = st.columns(3 if mostrar_back else 2, gap="small")
-    idx = 0
-    if mostrar_back:
-        with action_cols[0]:
+        mostrar_back = menu_actual != "Inicio"
+        if mostrar_back:
+            btn_cols = right_col.columns(3, gap="small")
+        else:
+            btn_cols = right_col.columns(2, gap="small")
+
+        col_idx = 0
+        if mostrar_back:
+            with btn_cols[col_idx]:
+                if st.button(
+                    "← Inicio",
+                    key="btn_back_inicio",
+                    type="secondary",
+                    help="Volver a Inicio",
+                ):
+                    _goto("Inicio")
+            col_idx += 1
+
+        with btn_cols[col_idx]:
             if st.button(
-                "← Inicio",
-                key="btn_back_inicio",
+                "Actualizar",
+                key="btn_refresh",
                 type="secondary",
-                use_container_width=True,
-                help="Volver a Inicio",
+                help="Actualizar datos y refrescar cachés",
             ):
-                _goto("Inicio")
-        idx = 1
+                st.cache_data.clear()
+                st.rerun()
 
-    with action_cols[idx]:
-        if st.button(
-            "Actualizar",
-            key="btn_refresh",
-            type="secondary",
-            use_container_width=True,
-            help="Actualizar datos y refrescar cachés",
-        ):
-            st.cache_data.clear()
-            st.rerun()
-
-    with action_cols[idx + 1]:
-        if st.button(
-            "Cerrar sesión",
-            key="btn_logout",
-            type="secondary",
-            use_container_width=True,
-            help="Finaliza tu sesión actual",
-        ):
-            soft_logout()
+        with btn_cols[col_idx + 1 if mostrar_back else col_idx]:
+            if st.button(
+                "Cerrar sesión",
+                key="btn_logout",
+                type="secondary",
+                help="Finaliza tu sesión actual",
+            ):
+                soft_logout()
 
 _render_navigation(opciones_menu, menu_actual)
 
