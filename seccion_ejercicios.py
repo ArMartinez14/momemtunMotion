@@ -183,6 +183,17 @@ def base_ejercicios():
         for k in keys_to_remove:
             del st.session_state[k]
 
+    select_all_trigger = st.session_state.pop("privacidad_select_all_trigger", False)
+    clear_all_trigger = st.session_state.pop("privacidad_clear_all_trigger", False)
+
+    if modo_privacidad and (select_all_trigger or clear_all_trigger):
+        for e in ejercicios:
+            key = f"priv_sel_{e['_id']}"
+            if clear_all_trigger:
+                st.session_state[key] = False
+            elif e.get("_puede_editar_privacidad", False):
+                st.session_state[key] = True
+
     checkbox_registry: dict[str, dict] = {}
 
     tab_todos, tab_sin_video = st.tabs(["Todos", "Sin video"])
@@ -315,20 +326,6 @@ def base_ejercicios():
                     show_privacidad_checkbox=modo_privacidad,
                     registry=checkbox_registry,
                 )
-
-    select_all_trigger = st.session_state.pop("privacidad_select_all_trigger", False)
-    clear_all_trigger = st.session_state.pop("privacidad_clear_all_trigger", False)
-
-    if modo_privacidad and checkbox_registry:
-        if select_all_trigger:
-            for info in checkbox_registry.values():
-                if info.get("allowed"):
-                    st.session_state[info["key"]] = True
-            st.rerun()
-        if clear_all_trigger:
-            for info in checkbox_registry.values():
-                st.session_state[info["key"]] = False
-            st.rerun()
 
     selected_ids = []
     if modo_privacidad and checkbox_registry:
