@@ -1,352 +1,574 @@
-# seccion_ejercicios.py
-import re
+# seguimiento_entrenamiento.py
+from __future__ import annotations
+import json, re
+from datetime import datetime, timedelta, date
+
+import pandas as pd
 import streamlit as st
+
 import firebase_admin
-from firebase_admin import firestore
+from firebase_admin import credentials, firestore
 
-# ======================
-# Helpers de permisos
-# ======================
-ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+# =============================
+#  Estilos / Constantes
+# =============================
+PRIMARY   = "#00C2FF"
+SUCCESS   = "#22C55E"
+WARNING   = "#F59E0B"
+DANGER    = "#EF4444"
+BG_DARK   = "#0B0F14"
+SURFACE   = "#121821"
+TEXT_MAIN = "#FFFFFF"
+TEXT_MUTED= "#94A3B8"
+STROKE    = "rgba(255,255,255,.08)"
 
-def _es_admin() -> bool:
-    rol = (st.session_state.get("rol") or "").strip()
-    return rol in ADMIN_ROLES
 
-def _correo_user() -> str:
-    return (st.session_state.get("correo") or "").strip().lower()
+# =============================
+#  Helpers base
+# =============================
+def _ensure_fb():
+    """Inicializa Firebase si hace falta y devuelve el cliente Firestore."""
+    if not firebase_admin._apps:
+        cred_dict = json.loads(st.secrets["FIREBASE_CREDENTIALS"])
+        cred = credentials.Certificate(cred_dict)
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
-def _puede_editar_video(row: dict) -> bool:
-    """Admin siempre; entrenador solo si es creador/propietario."""
-    if _es_admin():
-        return True
-    creador = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
-    return creador and creador == _correo_user()
+def normalizar_id(correo: str) -> str:
+    return (correo or "").strip().lower()
 
-def _puede_editar_privacidad(row: dict) -> bool:
-    """Usa misma regla que video: admin o creador."""
-    return _puede_editar_video(row)
+def safe_int(x, default=0):
+    try: return int(float(x))
+    except Exception: return default
 
-def _es_url_valida(url: str) -> bool:
-    """Valida http(s) y que el dominio sea YouTube."""
-    if not url:
-        return False
-    url = url.strip()
-    patron_http = r"^https?://[^\s]+$"
-    patron_yt = r"(youtube\.com|youtu\.be)"
-    return bool(re.match(patron_http, url, flags=re.I)) and bool(re.search(patron_yt, url, flags=re.I))
+def safe_float(x, default=0.0):
+    try: return float(x)
+    except Exception: return default
 
-def _formato_link(url: str) -> str:
-    return f"[Ver video]({url})" if url else "-"
+def parse_reps_min(value) -> int | None:
+    """Extrae el mínimo de repeticiones desde formatos típicos."""
+    if value is None: return None
+    if isinstance(value, (int, float)):
+        try: return int(value)
+        except Exception: return None
+    if isinstance(value, dict):
+        for k in ("min","reps_min","rep_min","rmin"):
+            if k in value:
+                try: return int(value[k])
+                except Exception: pass
+        if "reps" in value:
+            return parse_reps_min(value["reps"])
+    s = str(value).strip().lower()
+    m = re.match(r"^\s*(\d+)\s*[x×]\s*\d+", s)
+    if m: return int(m.group(1))
+    m = re.match(r"^\s*(\d+)\s*[-–—]\s*(\d+)", s)
+    if m: return int(m.group(1))
+    m = re.match(r"^\s*(\d+)\s*$", s)
+    if m: return int(m.group(1))
+    return None
 
-def _chunked(items: list, size: int):
-    for i in range(0, len(items), size):
-        yield items[i:i + size]
-
-def _actualizar_privacidad(doc_ids: list[str], publico: bool):
-    if not doc_ids:
-        return
-
-    db = firestore.client()
-    ref = db.collection("ejercicios")
-    for lote in _chunked(doc_ids, 400):
-        batch = db.batch()
-        for doc_id in lote:
-            batch.update(ref.document(doc_id), {"publico": publico})
-        batch.commit()
-
-# ======================
-# Lectura con filtros de visibilidad
-# ======================
-@st.cache_data(show_spinner=False, ttl=60)
-def _cargar_ejercicios():
+def clasificar_categoria(reps_min: int | None) -> str:
     """
-    Lee colección 'ejercicios' filtrando:
-      - Admin: ve TODOS.
-      - No admin: ve (publico == True) + (entrenador == <su_correo>).
-    Devuelve lista de dicts para UI.
+    Regla:
+      - reps_min < 6          -> Fuerza
+      - 6 <= reps_min < 12    -> Hipertrofia
+      - reps_min >= 12        -> Accesorio
     """
-    db = firestore.client()  # Firebase ya debe estar inicializado en tu main
-    data = []
-    correo = _correo_user()
-    es_admin = _es_admin()
+    if reps_min is None: return "Accesorio"
+    if reps_min < 6:     return "Fuerza"
+    if reps_min < 12:    return "Hipertrofia"
+    return "Accesorio"
 
-    try:
-        if es_admin:
-            docs = db.collection("ejercicios").stream()
+
+# =============================
+#  Lectura de datos (según tu esquema real)
+# =============================
+def listar_clientes_con_rutinas(db) -> list[str]:
+    """Correos únicos desde 'rutinas_semanales' (campo 'correo')."""
+    correos = set()
+    for doc in db.collection("rutinas_semanales").limit(1000).stream():
+        data = doc.to_dict() or {}
+        email = data.get("correo")
+        if email:
+            correos.add(normalizar_id(email))
+    return sorted(correos)
+
+def listar_evaluaciones_cliente(db, correo: str) -> list[dict]:
+    """Evals (si existen). Se muestran en los select; si no, se usa fecha manual."""
+    out = []
+    q = db.collection("evaluaciones").where("correo", "==", normalizar_id(correo))
+    for doc in q.stream():
+        d = doc.to_dict() or {}
+        f = d.get("fecha")
+        if isinstance(f, str):
+            try: d["_fecha_dt"] = datetime.fromisoformat(f)
+            except Exception: d["_fecha_dt"] = None
+        elif hasattr(f, "to_datetime"):
+            d["_fecha_dt"] = f.to_datetime()
+        elif isinstance(f, datetime):
+            d["_fecha_dt"] = f
         else:
-            # 1) Públicos
-            pub_docs = list(db.collection("ejercicios").where("publico", "==", True).stream())
-            # 2) Privados del entrenador
-            priv_docs = []
-            if correo:
-                priv_docs = list(db.collection("ejercicios").where("entrenador", "==", correo).stream())
-            # Unir (evitar duplicados por id)
-            by_id = {}
-            for d in pub_docs + priv_docs:
-                if getattr(d, "exists", True):
-                    by_id[d.id] = d
-            docs = by_id.values()
+            d["_fecha_dt"] = None
+        d["_id"] = doc.id
+        out.append(d)
+    out.sort(key=lambda x: x.get("_fecha_dt") or datetime.min)
+    return out
 
-        for d in docs:
-            if not getattr(d, "exists", True):
-                continue
-            row = d.to_dict() or {}
-            row["_id"] = d.id
-            row["nombre"] = row.get("nombre", "")
-            row["id_implemento"] = row.get("id_implemento", "")
-            # Visibilidad/autor (para UI)
-            row["publico"] = row.get("publico", False)
-            row["entrenador"] = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
+def dia_finalizado(doc_dict: dict, dia_key: str) -> bool:
+    """
+    Día finalizado según tu app:
+      - doc["rutina"][f"{dia}_finalizado"] == True
+    (Se mantiene compatibilidad con mapas alternativos si existieran).
+    """
+    dia_key = str(dia_key)
+    rutina = doc_dict.get("rutina") or {}
+    flag_key = f"{dia_key}_finalizado"
+    if isinstance(rutina, dict) and flag_key in rutina:
+        return bool(rutina.get(flag_key) is True)
 
-            video_raw = str(row.get("video", "") or "").strip()
-            row["_tiene_video"] = bool(video_raw)
-            row["_video"] = video_raw
-            row["_puede_editar_video"] = _puede_editar_video(row)
-            row["_puede_editar_privacidad"] = _puede_editar_privacidad(row)
-            data.append(row)
+    fin_map = doc_dict.get("finalizados")
+    if isinstance(fin_map, dict):
+        val = fin_map.get(dia_key)
+        if isinstance(val, bool):
+            return val
 
-        data.sort(key=lambda x: x.get("nombre", "").lower())
-    except Exception as ex:
-        st.error(f"Error leyendo ejercicios: {ex}")
+    estado_map = doc_dict.get("estado_por_dia")
+    if isinstance(estado_map, dict):
+        val = str(estado_map.get(dia_key, "")).strip().lower()
+        if val in ("fin","final","finalizado","completado","done"):
+            return True
 
-    return data
+    alt = doc_dict.get(f"dia_{dia_key}")
+    if isinstance(alt, dict) and "finalizado" in alt:
+        return bool(alt.get("finalizado"))
 
-def _guardar_video(doc_id: str, url: str):
-    db = firestore.client()
-    db.collection("ejercicios").document(doc_id).update({"video": url})
+    return False
 
-def _quitar_video(doc_id: str):
-    db = firestore.client()
-    db.collection("ejercicios").document(doc_id).update({"video": ""})
-
-# ======================
-# UI
-# ======================
-def base_ejercicios():
-    st.header("📚 Base de ejercicios")
-
-    # Estado del editor inline
-    st.session_state.setdefault("edit_video_id", None)
-    st.session_state.setdefault("edit_video_default", "")
-    st.session_state.setdefault("privacidad_modo", False)
-    st.session_state.setdefault("privacidad_accion", "publico")
-
-    aplicar_privacidad = False
-
-    col_title, col_menu, col_reload = st.columns([1, 0.26, 0.12])
-    with col_menu:
-        with st.expander("⚙️ Opciones", expanded=False):
-            st.caption("Privacidad de ejercicios")
-            st.checkbox(
-                "Editar privacidad masiva",
-                key="privacidad_modo",
-                help="Activa las casillas para seleccionar varios ejercicios a la vez.",
-            )
-            st.radio(
-                "Acción",
-                options=("publico", "privado"),
-                format_func=lambda v: "Hacer públicos" if v == "publico" else "Hacer privados",
-                key="privacidad_accion",
-                disabled=not st.session_state.get("privacidad_modo"),
-            )
-            st.caption("Solo se aplicará en ejercicios propios o si eres administrador.")
-            aplicar_privacidad = st.button(
-                "Aplicar a seleccionados",
-                type="primary",
-                disabled=not st.session_state.get("privacidad_modo"),
-            )
-
-    with col_reload:
-        if st.button("🔄 Recargar", help="Volver a leer desde Firestore", key="reload_ej"):
-            st.cache_data.clear()
-            st.rerun()
-
-    ejercicios = _cargar_ejercicios()
-    total = len(ejercicios)
-    con_video = sum(1 for e in ejercicios if e["_tiene_video"])
-    st.caption(f"Total: **{total}** | Con video: **{con_video}** | Sin video: **{total - con_video}**")
-
-    q = st.text_input(
-        "🔎 Buscar por nombre o ID de implemento",
-        placeholder="Ej: sentadilla, polea, db-20…",
-        key="search_ej",
-    )
-    if q:
-        qn = q.strip().lower()
-        ejercicios = [
-            e for e in ejercicios
-            if qn in e["nombre"].lower() or qn in str(e["id_implemento"]).lower()
-        ]
-
-    modo_privacidad = st.session_state.get("privacidad_modo", False)
-    if not modo_privacidad:
-        keys_to_remove = [k for k in list(st.session_state.keys()) if k.startswith("priv_sel_")]
-        for k in keys_to_remove:
-            del st.session_state[k]
-
-    checkbox_registry: dict[str, dict] = {}
-
-    tab_todos, tab_sin_video = st.tabs(["Todos", "Sin video"])
-
-    # ---- Componente card + editor inline (con prefijo para evitar keys duplicadas)
-    def _card_ejercicio(
-        e,
-        prefix: str,
-        show_privacidad_checkbox: bool = False,
-        registry: dict | None = None,
-    ):
-        with st.container(border=True):
-            if show_privacidad_checkbox:
-                col_sel, c1, c2, c3, c4 = st.columns([0.8, 3.0, 1.2, 2.4, 2.0])
-                sel_key = f"priv_sel_{e['_id']}"
-                disabled_sel = not e.get("_puede_editar_privacidad", False)
-                col_sel.checkbox(
-                    "Sel.",
-                    key=sel_key,
-                    value=st.session_state.get(sel_key, False),
-                    help="Selecciona el ejercicio para cambiar su privacidad.",
-                    disabled=disabled_sel,
-                )
-                if disabled_sel:
-                    col_sel.caption("Sin permiso")
-                if registry is not None:
-                    registry[e["_id"]] = {
-                        "key": sel_key,
-                        "allowed": not disabled_sel,
-                        "nombre": e.get("nombre", ""),
-                    }
-            else:
-                c1, c2, c3, c4 = st.columns([3.0, 1.2, 2.4, 2.0])
-            c1.markdown(f"**{e['nombre']}**  \n`{e['_id']}`")
-            c4.markdown(
-                f"**Implemento:**  \n`{e.get('id_implemento','') or '-'}`  \n"
-                f"**Visibilidad:** {'Público' if e.get('publico') else 'Privado'}  \n"
-                f"**Creador:** `{e.get('entrenador') or '-'}`"
-            )
-
-            # Info de video + botones según permiso
-            if e["_tiene_video"]:
-                c2.markdown("**Video:** ✅")
-                c3.markdown(_formato_link(e["_video"]))
-                b1, b2 = c3.columns([1, 1])
-                editar_disabled = not e["_puede_editar_video"]
-                quitar_disabled = not e["_puede_editar_video"]
-                if b1.button("Editar", key=f"{prefix}_edit_{e['_id']}", disabled=editar_disabled):
-                    st.session_state.edit_video_id = e["_id"]
-                    st.session_state.edit_video_default = e["_video"]
-                    st.rerun()
-                if b2.button("Quitar", key=f"{prefix}_del_{e['_id']}", disabled=quitar_disabled):
-                    if e["_puede_editar_video"]:
-                        try:
-                            _quitar_video(e["_id"])
-                            st.success("Video eliminado.")
-                            st.cache_data.clear()
-                            st.rerun()
-                        except Exception as ex:
-                            st.error(f"Error al eliminar: {ex}")
-                    else:
-                        st.warning("No tienes permiso para quitar el video de este ejercicio.")
-            else:
-                c2.markdown("**Video:** ❌")
-                agregar_disabled = not e["_puede_editar_video"]
-                if c3.button("Agregar", key=f"{prefix}_add_{e['_id']}", disabled=agregar_disabled):
-                    st.session_state.edit_video_id = e["_id"]
-                    st.session_state.edit_video_default = ""
-
-            # Editor inline para el ejercicio activo
-            if st.session_state.edit_video_id == e["_id"]:
-                st.divider()
-                puede_editar = e["_puede_editar_video"]
-                with st.form(key=f"{prefix}_form_video_{e['_id']}", clear_on_submit=False):
-                    url = st.text_input(
-                        "Pega el link de YouTube",
-                        value=st.session_state.edit_video_default,
-                        placeholder="https://www.youtube.com/watch?v=...",
-                        key=f"{prefix}_inp_url_{e['_id']}",
-                        disabled=not puede_editar
-                    )
-                    colf1, colf2 = st.columns([1, 1])
-                    guardar = colf1.form_submit_button("💾 Guardar", disabled=not puede_editar)
-                    cancelar = colf2.form_submit_button("Cancelar")
-
-                    if guardar:
-                        if not puede_editar:
-                            st.warning("No tienes permiso para editar el video de este ejercicio.")
-                        elif not _es_url_valida(url):
-                            st.error("Por favor ingresa un link válido de YouTube (http/https).")
-                        else:
-                            try:
-                                _guardar_video(e["_id"], url.strip())
-                                st.success("¡Video guardado!")
-                                st.session_state.edit_video_id = None
-                                st.session_state.edit_video_default = ""
-                                st.cache_data.clear()
-                                st.rerun()
-                            except Exception as ex:
-                                st.error(f"Error guardando: {ex}")
-
-                    if cancelar:
-                        st.session_state.edit_video_id = None
-                        st.session_state.edit_video_default = ""
-                        st.rerun()
-
-    # ---- TAB: TODOS
-    with tab_todos:
-        if modo_privacidad:
-            st.caption("Marca los ejercicios y luego pulsa \"Aplicar a seleccionados\" en Opciones.")
-        for e in ejercicios:
-            _card_ejercicio(
-                e,
-                prefix="todos",
-                show_privacidad_checkbox=modo_privacidad,
-                registry=checkbox_registry,
-            )
-
-    # ---- TAB: SIN VIDEO
-    with tab_sin_video:
-        faltantes = [e for e in ejercicios if not e["_tiene_video"]]
-        if not faltantes:
-            st.success("🎉 No hay ejercicios faltantes de video en este filtro.")
-        else:
-            st.info(f"Hay **{len(faltantes)}** ejercicios sin video.")
-            for e in faltantes:
-                _card_ejercicio(
-                    e,
-                    prefix="sinvideo",
-                    show_privacidad_checkbox=modo_privacidad,
-                    registry=checkbox_registry,
-                )
-
-    accion_destino = st.session_state.get("privacidad_accion", "publico")
-    selected_ids = []
-    if modo_privacidad and checkbox_registry:
-        selected_ids = [
-            doc_id
-            for doc_id, info in checkbox_registry.items()
-            if info.get("allowed") and st.session_state.get(info.get("key"))
-        ]
-        st.caption(
-            f"Seleccionados: **{len(selected_ids)}** ejercicios | Acción: "
-            f"{'Hacer públicos' if accion_destino == 'publico' else 'Hacer privados'}"
-        )
-
-    if aplicar_privacidad:
-        if not modo_privacidad:
-            st.warning("Activa el modo de privacidad masiva para seleccionar ejercicios.")
-        elif not selected_ids:
-            st.warning("Selecciona al menos un ejercicio con permisos válidos.")
-        else:
+def obtener_lista_ejercicios(data_dia):
+    """
+    Normaliza el contenido del día a lista de ejercicios (dicts):
+      - lista directa de dicts
+      - dict con subclave 'ejercicios' (list/dict)
+      - dict con claves numéricas "1","2",...
+    """
+    if data_dia is None: return []
+    # Lista
+    if isinstance(data_dia, list):
+        if len(data_dia) == 1 and isinstance(data_dia[0], dict) and "ejercicios" in data_dia[0]:
+            return obtener_lista_ejercicios(data_dia[0]["ejercicios"])
+        return [e for e in data_dia if isinstance(e, dict)]
+    # Dict
+    if isinstance(data_dia, dict):
+        if "ejercicios" in data_dia:
+            ej = data_dia["ejercicios"]
+            if isinstance(ej, list):
+                return [e for e in ej if isinstance(e, dict)]
+            if isinstance(ej, dict):
+                try:
+                    pares = sorted(ej.items(), key=lambda kv: int(kv[0]))
+                    return [v for _, v in pares if isinstance(v, dict)]
+                except Exception:
+                    return [v for v in ej.values() if isinstance(v, dict)]
+            return []
+        claves_numericas = [k for k in data_dia.keys() if str(k).isdigit()]
+        if claves_numericas:
             try:
-                nuevo_estado = accion_destino == "publico"
-                _actualizar_privacidad(selected_ids, publico=nuevo_estado)
-                st.success(
-                    f"Se actualizaron {len(selected_ids)} ejercicios a "
-                    f"{'públicos' if nuevo_estado else 'privados'}."
+                pares = sorted(((k, data_dia[k]) for k in claves_numericas), key=lambda kv: int(kv[0]))
+                return [v for _, v in pares if isinstance(v, dict)]
+            except Exception:
+                return [data_dia[k] for k in data_dia if isinstance(data_dia[k], dict)]
+        return [v for v in data_dia.values() if isinstance(v, dict)]
+    return []
+
+def _iter_dias_rutina(doc_dict: dict):
+    """
+    Itera días desde doc['rutina'] (dict) y devuelve (dia_key, lista_ejercicios_del_dia).
+    Detecta días por claves numéricas "1","2",... y normaliza el día con obtener_lista_ejercicios().
+    """
+    r = doc_dict.get("rutina")
+    if not isinstance(r, dict):
+        return
+    dia_keys = [k for k in r.keys() if str(k).isdigit()]
+    dia_keys.sort(key=lambda x: int(x))
+    for dia_key in dia_keys:
+        ejercicios_raw = r.get(dia_key)
+        lista = obtener_lista_ejercicios(ejercicios_raw)
+        yield str(dia_key), lista
+
+def iter_ejercicios_en_rango(db, correo: str, desde: date, hasta: date,
+                             usar_real: bool, excluir_warmup: bool):
+    """
+    Estructura:
+      - 'correo' (string)
+      - 'fecha_lunes' (YYYY-MM-DD)
+      - 'rutina' = dict {"1":[...], "2":[...]}
+    REGLA:
+      - Teórico (usar_real=False): cuenta TODOS los días.
+      - Real    (usar_real=True):  SOLO días finalizados.
+    Switch:
+      - excluir_warmup: omite ejercicios cuyo bloque sea "Warm Up" (o seccion equivalente).
+    """
+    correo_norm = normalizar_id(correo)
+
+    docs = list(
+        db.collection("rutinas_semanales")
+          .where("correo", "==", correo_norm)
+          .stream()
+    )
+
+    for doc in docs:
+        data = doc.to_dict() or {}
+
+        # Fecha base de semana
+        fecha_semana = None
+        v = data.get("fecha_lunes") or data.get("semana_inicio") or data.get("fecha")
+        if isinstance(v, str):
+            try: fecha_semana = datetime.fromisoformat(v).date()
+            except Exception: fecha_semana = None
+        if not fecha_semana:
+            # Fallback por ID *_YYYY_MM_DD
+            try:
+                tail = "_".join(doc.id.split("_")[-3:])
+                fecha_semana = datetime.strptime(tail, "%Y_%m_%d").date()
+            except Exception:
+                continue
+
+        # Recorremos días
+        for dia_key, ejercicios in _iter_dias_rutina(data):
+            try: idx = int(dia_key) - 1
+            except Exception: idx = 0
+            fecha_dia = fecha_semana + timedelta(days=idx)
+
+            # Filtro por rango
+            if not (desde <= fecha_dia <= hasta):
+                continue
+
+            # Real = solo finalizados
+            if usar_real and (not dia_finalizado(data, dia_key)):
+                continue
+
+            if not isinstance(ejercicios, list):
+                continue
+
+            for ej in ejercicios:
+                if not isinstance(ej, dict):
+                    continue
+
+                # Excluir Warm Up (bloque/seccion)
+                if excluir_warmup:
+                    bloque = str(ej.get("bloque", ej.get("seccion", ""))).strip().lower()
+                    bloque_norm = bloque.replace("-", " ").replace("_", " ")
+                    if bloque_norm == "warm up":
+                        continue
+
+                series   = safe_int(ej.get("series", 0), 0)
+                reps_min = parse_reps_min(ej.get("reps_min", ej.get("reps")))
+                reps_min = safe_int(reps_min or 0, 0)
+                peso     = safe_float(ej.get("peso", 0), 0.0)
+
+                yield {
+                    "fecha": fecha_dia,
+                    "ejercicio": ej.get("ejercicio"),
+                    "series": series,
+                    "reps_min": reps_min,
+                    "peso": peso
+                }
+
+
+# =============================
+#  Agregaciones (tablas)
+# =============================
+def agrupar_por_semana(ej_list: list[dict]) -> pd.DataFrame:
+    """Devuelve DF con columnas: semana, categoria, series, volumen, tonelaje."""
+    rows = []
+    for ej in ej_list:
+        reps_min = ej.get("reps_min") or 0
+        categoria = clasificar_categoria(reps_min)
+        series = safe_int(ej.get("series"), 0)
+        peso = safe_float(ej.get("peso"), 0.0)
+        volumen = series * reps_min
+        tonelaje = volumen * peso
+
+        f: date = ej["fecha"]
+        lunes = f - timedelta(days=f.weekday())
+
+        rows.append({
+            "semana": lunes,
+            "categoria": categoria,
+            "series": series,
+            "volumen": volumen,
+            "tonelaje": tonelaje
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["semana", "categoria", "series", "volumen", "tonelaje"])
+
+    df = pd.DataFrame(rows)
+    df = df.groupby(["semana", "categoria"], as_index=False).sum(numeric_only=True)
+    df = df.sort_values(["semana", "categoria"])
+    return df
+
+def resumen_semanal(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Retorna (df_totales, df_promedio_por_categoria)."""
+    if df.empty:
+        empty_cols = ["categoria", "series", "volumen", "tonelaje"]
+        return (pd.DataFrame(columns=["semana"] + empty_cols),
+                pd.DataFrame(columns=empty_cols))
+    df_totales = df.copy()
+    semanas_count = df["semana"].nunique()
+    df_prom = (df.groupby("categoria", as_index=False)[["series","volumen","tonelaje"]]
+                 .sum(numeric_only=True))
+    if semanas_count > 0:
+        df_prom[["series","volumen","tonelaje"]] = df_prom[["series","volumen","tonelaje"]] / semanas_count
+    df_prom = df_prom.sort_values("categoria")
+    return df_totales, df_prom
+
+
+# =============================
+#  Diagnóstico
+# =============================
+def diagnosticar_estructura(db, correo: str, desde: date, hasta: date,
+                             usar_real: bool, excluir_warmup: bool):
+    correo_norm = normalizar_id(correo)
+    rows = []
+
+    docs = list(db.collection("rutinas_semanales")
+                  .where("correo", "==", correo_norm).stream())
+
+    for d in docs:
+        data = d.to_dict() or {}
+
+        # Fecha semana
+        fecha_semana = None
+        v = data.get("fecha_lunes") or data.get("semana_inicio") or data.get("fecha")
+        if isinstance(v, str):
+            try: fecha_semana = datetime.fromisoformat(v).date()
+            except Exception: pass
+        if not fecha_semana:
+            try:
+                tail = "_".join(d.id.split("_")[-3:])
+                fecha_semana = datetime.strptime(tail, "%Y_%m_%d").date()
+            except Exception:
+                pass
+
+        rutina = data.get("rutina")
+        if not isinstance(rutina, dict):
+            rows.append({"doc_id": d.id, "comentario": "Sin 'rutina' dict"})
+            continue
+
+        dia_keys = [k for k in rutina.keys() if str(k).isdigit()]
+        dia_keys.sort(key=lambda x: int(x) if str(x).isdigit() else 999)
+
+        for dia_key in dia_keys:
+            try: idx = int(dia_key) - 1
+            except Exception: idx = 0
+            fecha_dia = fecha_semana + timedelta(days=idx) if fecha_semana else None
+
+            en_rango = bool(fecha_dia and (desde <= fecha_dia <= hasta))
+            fin = dia_finalizado(data, dia_key)
+            motivo = "OK"
+            if not en_rango:
+                motivo = "Fuera de rango"
+            elif usar_real and not fin:
+                motivo = "No finalizado (modo REAL)"
+
+            ejercicios = obtener_lista_ejercicios(rutina.get(dia_key))
+            # Conteos robustos (saltando no-dicts)
+            n_total = sum(1 for e in ejercicios if isinstance(e, dict))
+            if excluir_warmup:
+                n_post = sum(
+                    1
+                    for e in ejercicios
+                    if isinstance(e, dict)
+                    and str(e.get("bloque", e.get("seccion", ""))).strip().lower().replace("-", " ").replace("_", " ") != "warm up"
                 )
-                for info in checkbox_registry.values():
-                    st.session_state.pop(info["key"], None)
-                st.cache_data.clear()
-                st.rerun()
-            except Exception as ex:
-                st.error(f"Error actualizando privacidad: {ex}")
+            else:
+                n_post = n_total
+
+            rows.append({
+                "doc_id": d.id,
+                "fecha_semana": (fecha_semana.isoformat() if fecha_semana else None),
+                "dia": dia_key,
+                "fecha_dia": (fecha_dia.isoformat() if fecha_dia else None),
+                "finalizado": fin,
+                "en_rango": en_rango,
+                "n_ejercicios_total(dicts)": n_total,
+                "n_ejercicios_despues_filtro(dicts)": n_post,
+                "incluido?": (motivo == "OK"),
+                "motivo": motivo,
+            })
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.warning("No se encontraron documentos para ese correo.")
+    else:
+        st.dataframe(df, use_container_width=True)
+
+
+# =============================
+#  UI principal (solo muestra; no guarda)
+# =============================
+def app():
+    # Estilos
+    st.markdown(f"""
+    <style>
+    :root {{
+      --primary:{PRIMARY}; --success:{SUCCESS}; --warning:{WARNING}; --danger:{DANGER};
+      --bg:{BG_DARK}; --surface:{SURFACE}; --muted:{TEXT_MUTED}; --stroke:{STROKE};
+    }}
+    html,body,[data-testid="stAppViewContainer"] {{ background: var(--bg); color: {TEXT_MAIN}; }}
+    [data-testid="stSidebar"] {{ background: {SURFACE}; }}
+    .block-container {{ padding-top: .8rem; }}
+    h1,h2,h3 {{ color: {TEXT_MAIN}; }}
+    .small-muted {{ color: {TEXT_MUTED}; font-size: .9rem; }}
+    hr {{ border: 1px solid {STROKE}; margin: .6rem 0 1rem; }}
+    </style>
+    """, unsafe_allow_html=True)
+
+    db = _ensure_fb()
+
+    # ---------- Controles ----------
+    st.markdown("### Configuración")
+
+    colA, colB, colC = st.columns([1, 1, 1])
+    with colA:
+        clientes = listar_clientes_con_rutinas(db)
+        correo_sel = st.selectbox("Cliente (correo)", options=clientes, index=0 if clientes else None)
+
+    with colB:
+        usar_real = st.toggle("Usar **Real (solo días finalizados)**", value=False)
+
+    with colC:
+        excluir_warmup = st.toggle("Excluir **Warm Up**", value=True,
+                                   help="Si está activo, no contabiliza ejercicios cuyo bloque/sección sea Warm Up.")
+
+    colD, colE = st.columns(2)
+    with colD:
+        evals = listar_evaluaciones_cliente(db, correo_sel) if correo_sel else []
+        nombres_eval = [f"{(e.get('_fecha_dt') or datetime.min).date()} — {e.get('nombre','Evaluación')}" for e in evals]
+        e1 = st.selectbox("Evaluación inicial", options=["(usar fecha manual)"] + nombres_eval, index=0)
+    with colE:
+        e2 = st.selectbox("Evaluación final", options=["(usar fecha manual)"] + nombres_eval, index=0)
+
+    def _fecha_from_eval_label(lbl: str) -> date | None:
+        try: return datetime.fromisoformat(lbl.split(" — ")[0].strip()).date()
+        except Exception: return None
+
+    hoy = date.today()
+    colF, colG = st.columns(2)
+    with colF:
+        fecha_ini = st.date_input("Desde (incl.)", value=hoy - timedelta(days=28))
+    with colG:
+        fecha_fin = st.date_input("Hasta (incl.)", value=hoy)
+
+    if e1 != "(usar fecha manual)":
+        f = _fecha_from_eval_label(e1)
+        if f: fecha_ini = f
+    if e2 != "(usar fecha manual)":
+        f = _fecha_from_eval_label(e2)
+        if f: fecha_fin = f
+
+    # ---------- Diagnóstico ----------
+    with st.expander("🔎 Diagnóstico de búsqueda"):
+        st.caption("Muestra qué días/ejercicios entra según tu selección.")
+        if st.button("Ejecutar diagnóstico", use_container_width=True):
+            diagnosticar_estructura(db, correo_sel, fecha_ini, fecha_fin, usar_real, excluir_warmup)
+
+    st.divider()
+
+    # ---------- Ejecutar (solo visual) ----------
+    disabled = (not correo_sel) or (fecha_ini is None) or (fecha_fin is None) or (fecha_ini > fecha_fin)
+    if st.button("Calcular seguimiento", type="primary", disabled=disabled, use_container_width=True):
+        with st.spinner("Calculando…"):
+            ejercicios = list(iter_ejercicios_en_rango(
+                db, correo_sel, fecha_ini, fecha_fin,
+                usar_real=usar_real, excluir_warmup=excluir_warmup
+            ))
+            df = agrupar_por_semana(ejercicios)
+            df_totales, df_prom = resumen_semanal(df)
+
+        if df.empty:
+            st.error("No se encontraron ejercicios en el rango seleccionado con los criterios actuales.")
+            return
+
+        st.success("✅ Resumen generado (solo visual, no se guarda).")
+
+        st.markdown("### Totales por **Semana × Categoría**")
+        st.dataframe(df_totales, use_container_width=True)
+
+        st.markdown("### Promedio **semanal** por Categoría")
+        st.dataframe(df_prom, use_container_width=True)
+
+        import matplotlib.pyplot as plt
+
+        # --- Tonelaje: área apilada ---
+        st.markdown("#### Tonelaje por semana (área apilada)")
+        pivot_ton = df_totales.pivot_table(index="semana", columns="categoria",
+                                        values="tonelaje", aggfunc="sum").fillna(0)
+        fig1, ax1 = plt.subplots()
+        pivot_ton.plot(kind="area", stacked=True, ax=ax1, alpha=0.7)
+        ax1.set_xlabel("Semana"); ax1.set_ylabel("Tonelaje (kg)")
+        ax1.set_title("Tonelaje total acumulado")
+        st.pyplot(fig1)
+
+        # --- Volumen: líneas comparativas ---
+        st.markdown("#### Volumen por semana (líneas)")
+        pivot_vol = df_totales.pivot_table(index="semana", columns="categoria",
+                                        values="volumen", aggfunc="sum").fillna(0)
+        fig2, ax2 = plt.subplots()
+        pivot_vol.plot(ax=ax2, marker="o")
+        ax2.set_xlabel("Semana"); ax2.set_ylabel("Volumen (series × reps)")
+        ax2.set_title("Evolución del volumen por categoría")
+        st.pyplot(fig2)
+
+        # --- Series: barras agrupadas ---
+        st.markdown("#### Series por semana (barras agrupadas)")
+        pivot_ser = df_totales.pivot_table(index="semana", columns="categoria",
+                                        values="series", aggfunc="sum").fillna(0)
+        fig3, ax3 = plt.subplots()
+        pivot_ser.plot(kind="bar", ax=ax3)
+        ax3.set_xlabel("Semana"); ax3.set_ylabel("Series")
+        ax3.set_title("Series por semana y categoría")
+        st.pyplot(fig3)
+
+        # --- Distribución porcentual promedio ---
+        st.markdown("#### Distribución porcentual promedio (torta)")
+        fig4, ax4 = plt.subplots()
+        df_prom.set_index("categoria")["series"].plot(
+            kind="pie", ax=ax4, autopct="%1.1f%%", startangle=90
+        )
+        ax4.set_ylabel("")
+        ax4.set_title("Proporción de series por categoría (promedio)")
+        st.pyplot(fig4)
+
+        # --- Volumen vs Intensidad (barras + línea, doble eje) ---
+        # --- Volumen vs Intensidad: ambas en un mismo gráfico de líneas ---
+        st.markdown("#### Volumen vs Intensidad (comparación en una misma escala)")
+
+        # Agregados por semana
+        vol_semana = df_totales.groupby("semana", as_index=True)["volumen"].sum().sort_index()
+        ton_semana = df_totales.groupby("semana", as_index=True)["tonelaje"].sum().sort_index()
+
+        # Intensidad media = tonelaje / volumen
+        int_semana = ton_semana / vol_semana.replace(0, pd.NA)
+
+        # Normalizamos ambos para compararlos en la misma escala (0–1)
+        df_norm = pd.DataFrame({
+            "Volumen (reps totales)": vol_semana,
+            "Intensidad media (kg/rep)": int_semana
+        })
+        df_norm = df_norm / df_norm.max()
+
+        fig, ax = plt.subplots()
+        df_norm.plot(ax=ax, marker="o")
+        ax.set_title("Volumen vs Intensidad (normalizado)")
+        ax.set_xlabel("Semana")
+        ax.set_ylabel("Valor normalizado (0–1)")
+        ax.legend(loc="best")
+        st.pyplot(fig)
+
+        st.caption("👉 Los valores están normalizados para comparar tendencias; no representan cantidades absolutas.")
+
+# Ejecutable standalone (opcional)
+if __name__ == "__main__":
+    app()
