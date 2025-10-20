@@ -289,7 +289,6 @@ is_admin = rol in ("admin", "administrador") or (
 MENU_DEPORTISTA = [
     "Inicio",
     "Ver Rutinas",
-    "Crear Descarga",
 ]
 
 MENU_ENTRENADOR = [
