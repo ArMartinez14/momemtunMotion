@@ -142,6 +142,12 @@ def base_ejercicios():
                 key="privacidad_modo",
                 help="Activa las casillas para seleccionar varios ejercicios a la vez.",
             )
+            if st.session_state.get("privacidad_modo"):
+                col_all, col_clear = st.columns(2)
+                if col_all.button("Seleccionar todos", key="privacidad_select_all"):
+                    st.session_state["privacidad_select_all_trigger"] = True
+                if col_clear.button("Limpiar selección", key="privacidad_clear_all"):
+                    st.session_state["privacidad_clear_all_trigger"] = True
             st.caption("Solo se aplicará en ejercicios propios o si eres administrador.")
             aplicar_privacidad = st.button(
                 "Hacer públicos los seleccionados",
@@ -286,7 +292,7 @@ def base_ejercicios():
     # ---- TAB: TODOS
     with tab_todos:
         if modo_privacidad:
-            st.caption("Marca los ejercicios y luego pulsa \"Aplicar a seleccionados\" en Opciones.")
+            st.caption("Marca los ejercicios y luego pulsa \"Hacer públicos los seleccionados\" en Opciones.")
         for e in ejercicios:
             _card_ejercicio(
                 e,
@@ -309,6 +315,20 @@ def base_ejercicios():
                     show_privacidad_checkbox=modo_privacidad,
                     registry=checkbox_registry,
                 )
+
+    select_all_trigger = st.session_state.pop("privacidad_select_all_trigger", False)
+    clear_all_trigger = st.session_state.pop("privacidad_clear_all_trigger", False)
+
+    if modo_privacidad and checkbox_registry:
+        if select_all_trigger:
+            for info in checkbox_registry.values():
+                if info.get("allowed"):
+                    st.session_state[info["key"]] = True
+            st.rerun()
+        if clear_all_trigger:
+            for info in checkbox_registry.values():
+                st.session_state[info["key"]] = False
+            st.rerun()
 
     selected_ids = []
     if modo_privacidad and checkbox_registry:
