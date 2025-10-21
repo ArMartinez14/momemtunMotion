@@ -675,7 +675,7 @@ def _render_carga_csv():
 
     admin = es_admin()
     headers_norm = { (h or "").strip().lower(): h for h in (reader.fieldnames or []) }
-    obligatorias = ["detalle", "caracteristica", "patron de movimiento"]
+    obligatorias = ["detalle", "caracteristica"]
     faltantes = [nombre for nombre in obligatorias if nombre not in headers_norm]
     if faltantes:
         st.warning("Faltan columnas obligatorias en el CSV: " + ", ".join(sorted(faltantes)))
