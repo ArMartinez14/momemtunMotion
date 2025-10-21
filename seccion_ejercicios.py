@@ -1,4 +1,6 @@
 # seccion_ejercicios.py
+import csv
+import io
 import re
 import streamlit as st
 import firebase_admin
@@ -42,6 +44,27 @@ def _formato_link(url: str) -> str:
 def _chunked(items: list, size: int):
     for i in range(0, len(items), size):
         yield items[i:i + size]
+
+def _ejercicios_a_csv(rows: list[dict]) -> bytes:
+    """Convierte la lista de ejercicios (sin claves internas) a CSV UTF-8 BOM."""
+    visibles = []
+    campos = set()
+    for row in rows:
+        limpio = {k: v for k, v in row.items() if not k.startswith("_")}
+        visibles.append(limpio)
+        campos.update(limpio.keys())
+
+    if not campos:
+        campos = {"_id", "nombre"}
+
+    fieldnames = sorted(campos)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=fieldnames)
+    writer.writeheader()
+    for item in visibles:
+        writer.writerow({k: item.get(k, "") for k in fieldnames})
+
+    return buffer.getvalue().encode("utf-8-sig")
 
 def _actualizar_privacidad(doc_ids: list[str], publico: bool):
     if not doc_ids:
@@ -163,7 +186,17 @@ def base_ejercicios():
     ejercicios = _cargar_ejercicios()
     total = len(ejercicios)
     con_video = sum(1 for e in ejercicios if e["_tiene_video"])
-    st.caption(f"Total: **{total}** | Con video: **{con_video}** | Sin video: **{total - con_video}**")
+    csv_bytes = _ejercicios_a_csv(ejercicios)
+
+    col_stats, col_download = st.columns([1, 0.3])
+    col_stats.caption(f"Total: **{total}** | Con video: **{con_video}** | Sin video: **{total - con_video}**")
+    col_download.download_button(
+        "📥 Descargar CSV",
+        data=csv_bytes,
+        file_name="ejercicios.csv",
+        mime="text/csv",
+        help="Descarga todos los ejercicios con sus campos disponibles.",
+    )
 
     q = st.text_input(
         "🔎 Buscar por nombre o ID de implemento",
