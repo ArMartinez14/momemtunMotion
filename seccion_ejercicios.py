@@ -6,21 +6,31 @@ import streamlit as st
 import firebase_admin
 from firebase_admin import firestore
 
+from app_core.utils import empresa_de_usuario, EMPRESA_ASESORIA
+
 # ======================
 # Helpers de permisos
 # ======================
 ADMIN_ROLES = {"admin", "administrador", "owner", "Admin", "Administrador"}
+ENTRENADOR_ROLES = {"entrenador", "Entrenador", "coach", "Coach"}
+
+def _rol_actual() -> str:
+    return (st.session_state.get("rol") or "").strip()
+
 
 def _es_admin() -> bool:
-    rol = (st.session_state.get("rol") or "").strip()
-    return rol in ADMIN_ROLES
+    return _rol_actual() in ADMIN_ROLES
+
+
+def _es_entrenador() -> bool:
+    return _rol_actual() in ENTRENADOR_ROLES
 
 def _correo_user() -> str:
     return (st.session_state.get("correo") or "").strip().lower()
 
 def _puede_editar_video(row: dict) -> bool:
-    """Admin siempre; entrenador solo si es creador/propietario."""
-    if _es_admin():
+    """Admin o entrenador siempre; otros solo si son creadores."""
+    if _es_admin() or _es_entrenador():
         return True
     creador = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
     return creador and creador == _correo_user()
@@ -93,6 +103,8 @@ def _cargar_ejercicios():
     data = []
     correo = _correo_user()
     es_admin = _es_admin()
+    empresa = empresa_de_usuario(correo) if correo else None
+    restringe_privados_por_empresa = (not es_admin) and (empresa == EMPRESA_ASESORIA)
 
     try:
         if es_admin:
@@ -121,6 +133,10 @@ def _cargar_ejercicios():
             # Visibilidad/autor (para UI)
             row["publico"] = row.get("publico", False)
             row["entrenador"] = (row.get("entrenador") or row.get("creado_por") or "").strip().lower()
+
+            if restringe_privados_por_empresa and not row["publico"]:
+                if not correo or row["entrenador"] != correo:
+                    continue
 
             video_raw = str(row.get("video", "") or "").strip()
             row["_tiene_video"] = bool(video_raw)
@@ -156,32 +172,8 @@ def base_ejercicios():
 
     aplicar_privacidad = False
 
-    col_title, col_menu, col_reload = st.columns([1, 0.26, 0.12])
-    with col_menu:
-        with st.expander("⚙️ Opciones", expanded=False):
-            st.caption("Privacidad de ejercicios")
-            st.checkbox(
-                "Editar privacidad masiva",
-                key="privacidad_modo",
-                help="Activa las casillas para seleccionar varios ejercicios a la vez.",
-            )
-            if st.session_state.get("privacidad_modo"):
-                col_all, col_clear = st.columns(2)
-                if col_all.button("Seleccionar todos", key="privacidad_select_all"):
-                    st.session_state["privacidad_select_all_trigger"] = True
-                if col_clear.button("Limpiar selección", key="privacidad_clear_all"):
-                    st.session_state["privacidad_clear_all_trigger"] = True
-            st.caption("Solo se aplicará en ejercicios propios o si eres administrador.")
-            aplicar_privacidad = st.button(
-                "Hacer públicos los seleccionados",
-                type="primary",
-                disabled=not st.session_state.get("privacidad_modo"),
-            )
-
-    with col_reload:
-        if st.button("🔄 Recargar", help="Volver a leer desde Firestore", key="reload_ej"):
-            st.cache_data.clear()
-            st.rerun()
+    es_admin = _es_admin()
+    st.caption("Solo administradores pueden editar privacidad masiva.")
 
     ejercicios = _cargar_ejercicios()
     total = len(ejercicios)
@@ -190,13 +182,14 @@ def base_ejercicios():
 
     col_stats, col_download = st.columns([1, 0.3])
     col_stats.caption(f"Total: **{total}** | Con video: **{con_video}** | Sin video: **{total - con_video}**")
-    col_download.download_button(
-        "📥 Descargar CSV",
-        data=csv_bytes,
-        file_name="ejercicios.csv",
-        mime="text/csv",
-        help="Descarga todos los ejercicios con sus campos disponibles.",
-    )
+    if es_admin:
+        col_download.download_button(
+            "📥 Descargar CSV",
+            data=csv_bytes,
+            file_name="ejercicios.csv",
+            mime="text/csv",
+            help="Descarga todos los ejercicios con sus campos disponibles.",
+        )
 
     q = st.text_input(
         "🔎 Buscar por nombre o ID de implemento",

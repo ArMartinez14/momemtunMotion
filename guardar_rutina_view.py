@@ -1,10 +1,13 @@
 # guardar_rutina_view.py — progresión acumulativa + RIR min/max + soporte "descanso" + series como progresión + fallbacks
-from firebase_admin import firestore
+from collections import defaultdict
 from datetime import timedelta
+from firebase_admin import firestore
 from herramientas import aplicar_progresion, normalizar_texto
 import streamlit as st
 import uuid
 from app_core.firebase_client import get_db
+from app_core.email_notifications import enviar_correo_rutina_disponible
+from app_core.utils import empresa_de_usuario
 
 # -------------------------
 # Helpers de conversión
@@ -74,6 +77,58 @@ def parsear_semanas(semanas_txt: str) -> list[int]:
         return []
 
 
+def _default_cardio_data() -> dict:
+    return {
+        "tipo": "LISS",
+        "modalidad": "",
+        "indicaciones": "",
+        "series": "",
+        "intervalos": "",
+        "tiempo_trabajo": "",
+        "intensidad_trabajo": "",
+        "tiempo_descanso": "",
+        "tipo_descanso": "",
+        "intensidad_descanso": "",
+    }
+
+
+def _normalizar_cardio_data(cardio: dict | None) -> dict:
+    data = _default_cardio_data()
+    if isinstance(cardio, dict):
+        for key in data:
+            value = cardio.get(key, data[key])
+            if isinstance(value, str):
+                data[key] = value.strip()
+            else:
+                data[key] = value
+    if data["tipo"] not in {"LISS", "HIIT"}:
+        data["tipo"] = "LISS"
+    return data
+
+
+def _cardio_tiene_datos(cardio: dict | None) -> bool:
+    if not isinstance(cardio, dict):
+        return False
+    for campo in (
+        "modalidad",
+        "indicaciones",
+        "series",
+        "intervalos",
+        "tiempo_trabajo",
+        "intensidad_trabajo",
+        "tiempo_descanso",
+        "tipo_descanso",
+        "intensidad_descanso",
+    ):
+        valor = cardio.get(campo, "")
+        if isinstance(valor, str):
+            if valor.strip():
+                return True
+        elif valor not in (None, ""):
+            return True
+    return False
+
+
 def _listar_ejercicios_de_dia(data):
     if isinstance(data, list):
         return [e for e in data if isinstance(e, dict)]
@@ -90,6 +145,78 @@ def _ejercicio_clave(e: dict) -> tuple[str, str, str]:
     circuito = (_s(e.get("circuito") or e.get("Circuito") or "")).upper()
     bloque = _norm(e.get("bloque") or e.get("Sección") or e.get("seccion") or "")
     return (nombre, circuito, bloque)
+
+
+def _indice_ejercicios_por_nombre(ejercicios_meta: dict[str, dict]) -> dict[str, dict]:
+    """Devuelve un índice nombre_normalizado -> metadata."""
+    idx: dict[str, dict] = {}
+    for clave, data in (ejercicios_meta or {}).items():
+        candidatos = [
+            clave,
+            (data or {}).get("nombre"),
+            (data or {}).get("Nombre"),
+            (data or {}).get("ejercicio"),
+        ]
+        for candidato in candidatos:
+            key_norm = _norm(candidato)
+            if key_norm and key_norm not in idx:
+                idx[key_norm] = data or {}
+    return idx
+
+
+@st.cache_data(show_spinner=False)
+def _cargar_ejercicios_metadata_para_guardado() -> dict[str, dict]:
+    """
+    Recupera metadata mínima de ejercicios (solo campos requeridos para clasificar series).
+    Sirve como fallback cuando la UI no entrega el catálogo completo.
+    """
+    resultado: dict[str, dict] = {}
+    try:
+        db = get_db()
+        for doc in db.collection("ejercicios").stream():
+            if not doc.exists:
+                continue
+            data = doc.to_dict() or {}
+            nombre = (data.get("nombre") or data.get("Nombre") or "").strip()
+            if not nombre:
+                continue
+            resultado[nombre] = {
+                "nombre": nombre,
+                "grupo_muscular_principal": data.get("grupo_muscular_principal")
+                    or data.get("grupo_muscular")
+                    or "",
+                "patron_de_movimiento": data.get("patron_de_movimiento") or "",
+            }
+    except Exception:
+        return {}
+    return resultado
+
+
+def _actualizar_series_categoria(
+    acumuladores: dict[str, defaultdict[str, float]],
+    nombre_ejercicio: str,
+    series_valor,
+    ejercicios_idx: dict[str, dict],
+) -> None:
+    """Suma las series del ejercicio a cada clasificación configurada."""
+    nombre_norm = _norm(nombre_ejercicio)
+    if not nombre_norm:
+        return
+    series_float = _f(series_valor)
+    if series_float is None or series_float <= 0:
+        return
+
+    data = ejercicios_idx.get(nombre_norm)
+    if not data:
+        for campo in acumuladores:
+            acumuladores[campo]["(no encontrado)"] += series_float
+        return
+
+    for campo in acumuladores:
+        categoria_val = _s(data.get(campo))
+        if not categoria_val:
+            categoria_val = "(sin dato)"
+        acumuladores[campo][categoria_val] += series_float
 
 
 def _extraer_rir_valores(e: dict) -> list[float]:
@@ -219,16 +346,29 @@ def aplicar_acumulado_rango(min_base, max_base, cantidad, operacion, semanas_a_a
 # -------------------------
 # Guardado principal
 # -------------------------
-def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, objetivo: str | None = None):
+def guardar_rutina(
+    nombre_sel,
+    correo,
+    entrenador,
+    fecha_inicio,
+    semanas,
+    dias,
+    objetivo: str | None = None,
+    ejercicios_meta: dict[str, dict] | None = None,
+):
     """
     Genera X semanas y aplica progresiones de forma ACUMULATIVA.
     Escalares: peso, tiempo, velocidad, descanso, series.
     Rangos: repeticiones (min/max) y RIR (min/max).
+    Además, clasifica las series por categoría (grupo muscular y patrón).
     """
     db = get_db()
     bloque_id = str(uuid.uuid4())
 
     docs_prev_cache: dict[tuple[str, str], dict | None] = {}
+    ejercicios_meta = ejercicios_meta or _cargar_ejercicios_metadata_para_guardado()
+    ejercicios_idx = _indice_ejercicios_por_nombre(ejercicios_meta)
+    campos_series_categoria = ("grupo_muscular_principal", "patron_de_movimiento")
 
     try:
         for semana_idx in range(int(semanas)):  # 0..(N-1)
@@ -248,11 +388,21 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                 "objetivo": _s(objetivo or ""),
                 "rutina": {}
             }
+            series_por_categoria_semana: dict[str, defaultdict[str, float]] = {
+                campo: defaultdict(float) for campo in campos_series_categoria
+            }
+            cardio_semana: dict[str, dict] = {}
 
             # Recorre los días definidos en la UI (Día 1..5)
             for i, _dia_label in enumerate(dias):
                 numero_dia = i + 1
                 lista_ejercicios = []
+                cardio_key = f"rutina_dia_{i + 1}_Cardio"
+                cardio_info = None
+                if cardio_key in st.session_state:
+                    cardio_tmp = _normalizar_cardio_data(st.session_state.get(cardio_key))
+                    if _cardio_tiene_datos(cardio_tmp):
+                        cardio_info = cardio_tmp
 
                 for seccion in ["Warm Up", "Work Out"]:
                     dia_key = f"rutina_dia_{i + 1}_{seccion.replace(' ', '_')}"
@@ -420,14 +570,53 @@ def guardar_rutina(nombre_sel, correo, entrenador, fecha_inicio, semanas, dias, 
                             "video":      video_link
                         })
 
+                        if seccion.strip().lower() == "work out":
+                            _actualizar_series_categoria(
+                                series_por_categoria_semana,
+                                nombre_ej,
+                                series,
+                                ejercicios_idx,
+                            )
+
                 if lista_ejercicios:
                     # Firestore solo acepta claves string en mapas, por eso guardamos el número de día como texto
                     rutina_semana["rutina"][str(numero_dia)] = lista_ejercicios
+                if cardio_info:
+                    cardio_semana[str(numero_dia)] = cardio_info
+
+            series_por_categoria_payload = {
+                campo: [
+                    {"categoria": categoria, "series": valor}
+                    for categoria, valor in sorted(
+                        mapa.items(),
+                        key=lambda item: (-item[1], item[0])
+                    )
+                ]
+                for campo, mapa in series_por_categoria_semana.items()
+                if mapa
+            }
+            if series_por_categoria_payload:
+                rutina_semana["series_por_categoria"] = series_por_categoria_payload
+            if cardio_semana:
+                rutina_semana["cardio"] = cardio_semana
 
             if rutina_semana["rutina"]:
                 doc_id = f"{correo_norm}_{fecha_norm}"
                 db.collection("rutinas_semanales").document(doc_id).set(rutina_semana)
 
         st.success(f"✅ Rutina generada correctamente para {semanas} semanas (progresión acumulativa + descanso + RIR min/max + series).")
+        empresa_cliente = empresa_de_usuario(correo)
+        envio_ok = enviar_correo_rutina_disponible(
+            correo=correo,
+            nombre=nombre_sel,
+            fecha_inicio=fecha_inicio,
+            semanas=semanas,
+            empresa=empresa_cliente,
+            coach=entrenador,
+        )
+        if envio_ok:
+            st.caption("El cliente fue notificado por correo con su bloque actualizado.")
+        else:
+            st.caption("No se pudo enviar el aviso por correo; revisa la configuración de notificaciones.")
     except Exception as e:
         st.error(f"❌ Error al guardar la rutina: {e}")

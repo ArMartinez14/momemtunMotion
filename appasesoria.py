@@ -81,13 +81,14 @@ def _menu_groups(opciones_menu: list[str]) -> list[dict[str, object]]:
     ])
     _agregar("atletas", "Atletas", [
         "Ingresar Deportista o Ejercicio",
+        "Anamnesis",
         "Ejercicios",
     ])
     _agregar("seguimiento", "Seguimiento", [
         "Reportes",
         SEGUIMIENTO_LABEL,
     ])
-    _agregar("admin", "Administración", ["Resumen (Admin)"])
+    _agregar("admin", "Administración", ["Resumen (Admin)", "Previsualizar Correos"])
 
     restantes_final = [op for op in restantes if op in restantes_set]
     if restantes_final:
@@ -259,6 +260,8 @@ from editar_rutinas import editar_rutinas
 from crear_descarga import descarga_rutina
 from reportes import ver_reportes
 from admin_resumen import ver_resumen_entrenadores  # si no lo usas, puedes comentar
+from admin_email_preview import ver_previsualizacion_correos
+from anamnesis_view import render_anamnesis, necesita_anamnesis
 
 # ➕ utilidades para cargar el módulo de seguimiento
 # 4) Tema base (paleta Momentum)
@@ -288,6 +291,7 @@ is_admin = rol in ("admin", "administrador") or (
 
 MENU_DEPORTISTA = [
     "Inicio",
+    "Anamnesis",
     "Ver Rutinas",
 ]
 
@@ -296,6 +300,7 @@ MENU_ENTRENADOR = [
     "Ver Rutinas",
     "Crear Rutinas",
     "Ingresar Deportista o Ejercicio",
+    "Anamnesis",
     "Borrar Rutinas",
     "Editar Rutinas",
     "Ejercicios",
@@ -304,7 +309,7 @@ MENU_ENTRENADOR = [
     SEGUIMIENTO_LABEL,
 ]
 
-MENU_ADMIN = MENU_ENTRENADOR + ["Resumen (Admin)"]
+MENU_ADMIN = MENU_ENTRENADOR + ["Resumen (Admin)", "Previsualizar Correos"]
 
 if is_admin:
     opciones_menu = MENU_ADMIN
@@ -333,6 +338,19 @@ menu_actual = _normalizar_menu(st.session_state.get("menu_radio"))
 if menu_actual not in opciones_menu:
     menu_actual = opciones_menu[0]
     st.session_state["menu_radio"] = menu_actual
+
+anamnesis_pendiente = False
+if rol == "deportista":
+    try:
+        anamnesis_pendiente = necesita_anamnesis(db, email)
+    except Exception:
+        anamnesis_pendiente = False
+else:
+    st.session_state.pop("anamnesis_pendiente", None)
+
+if anamnesis_pendiente and menu_actual != "Anamnesis":
+    st.session_state["menu_radio"] = "Anamnesis"
+    menu_actual = "Anamnesis"
 
 last_menu = st.session_state.get("_last_menu")
 menu_cambio = last_menu != menu_actual
@@ -377,6 +395,7 @@ with header:
             """,
             unsafe_allow_html=True,
         )
+        st.markdown("<div class='top-actions'>", unsafe_allow_html=True)
 
         if st.button(
             "Cerrar sesión",
@@ -406,6 +425,7 @@ with header:
                 use_container_width=True,
             ):
                 _goto("Inicio")
+        st.markdown("</div>", unsafe_allow_html=True)
 
 _render_navigation(opciones_menu, menu_actual)
 
@@ -428,6 +448,9 @@ elif opcion == "Crear Rutinas":
 
 elif opcion == "Ingresar Deportista o Ejercicio":
     ingresar_cliente_o_video_o_ejercicio()
+
+elif opcion == "Anamnesis":
+    render_anamnesis(db=db)
 
 elif opcion == "Borrar Rutinas":
     borrar_rutinas()
@@ -454,5 +477,11 @@ elif opcion in (SEGUIMIENTO_LABEL, label_seg_2):
 elif opcion == "Resumen (Admin)":
     if is_admin:
         ver_resumen_entrenadores()
+    else:
+        st.warning("Solo disponible para administradores.")
+
+elif opcion == "Previsualizar Correos":
+    if is_admin:
+        ver_previsualizacion_correos()
     else:
         st.warning("Solo disponible para administradores.")
