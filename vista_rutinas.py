@@ -422,7 +422,7 @@ st.markdown(
 )
 
 # CSS/tema unificado
-inject_theme()
+inject_theme(mode=theme_mode)
 def _rirstr(e: dict) -> str:
     """
     Devuelve el RIR en formato:
@@ -631,7 +631,19 @@ def _sanitizar_valor_reporte(valor: str, tipo: str) -> str:
             head, *tail = txt.split(".")
             txt = head + "." + "".join(tail)
     elif tipo == "reps":
-        txt = re.sub(r"[^0-9]", "", txt)
+        txt = txt.replace(",", ".")
+        match = re.search(r"-?\d+(?:\.\d+)?", txt)
+        if not match:
+            return ""
+        try:
+            valor = float(match.group(0))
+        except Exception:
+            return ""
+        if not math.isfinite(valor):
+            return ""
+        if abs(valor - round(valor)) < 1e-4:
+            return str(int(round(valor)))
+        return str(valor).rstrip("0").rstrip(".")
     return txt
 
 
@@ -1757,7 +1769,7 @@ def ver_rutinas():
             # 3) Texto de detalle (centrado)
             info_str = f"""
             <p style='text-align:center;
-                    color:#e5e5e5;
+                    color:var(--text-secondary-main);
                     font-size:0.95rem;
                     margin-top:6px;
                     margin-bottom:0;
