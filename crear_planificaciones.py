@@ -1181,7 +1181,6 @@ def crear_rutinas():
         label_visibility="collapsed",
     )
     dia_activo_label = dia_selector or dias_labels[0]
-    st.session_state["dia_editor_activo"] = dia_activo_label
     dia_activo_idx = dias_labels.index(dia_activo_label)
     st.caption("Selecciona un día para editar sus secciones sin recargar toda la página.")
 
