@@ -54,6 +54,60 @@ def _f(valor) -> float | None:
         return None
 
 
+def _parse_series_count(valor) -> int:
+    if isinstance(valor, (int, float)):
+        return max(0, int(valor))
+    s = str(valor or "").strip()
+    if not s:
+        return 0
+    match = re.search(r"\d+", s)
+    if not match:
+        return 0
+    try:
+        return max(0, int(match.group()))
+    except Exception:
+        return 0
+
+
+def _ensure_topset_len(data: list[dict] | None, length: int) -> list[dict]:
+    plantilla = {"Series": "", "RepsMin": "", "RepsMax": "", "Peso": "", "RirMin": "", "RirMax": ""}
+    data = list(data or [])
+    if length < 0:
+        length = 0
+    while len(data) < length:
+        data.append(dict(plantilla))
+    while len(data) > length:
+        data.pop()
+    return data
+
+
+def _normalizar_topset_data(raw) -> list[dict]:
+    campos = ("Series", "RepsMin", "RepsMax", "Peso", "RirMin", "RirMax")
+    if isinstance(raw, dict):
+        iterable = raw.values()
+    elif isinstance(raw, (list, tuple)):
+        iterable = raw
+    else:
+        iterable = []
+    resultado: list[dict] = []
+    for item in iterable:
+        if not isinstance(item, dict):
+            continue
+        limpio = {}
+        tiene_valor = False
+        for campo in campos:
+            valor = item.get(campo)
+            if valor in (None, ""):
+                valor = item.get(campo.lower(), "")
+            texto = str(valor).strip()
+            limpio[campo] = texto
+            if texto:
+                tiene_valor = True
+        if tiene_valor:
+            resultado.append(limpio)
+    return resultado
+
+
 def _video_de_catalogo(nombre: str) -> str:
     meta = EJERCICIOS.get(nombre, {}) or {}
     return (meta.get("video") or meta.get("Video") or "").strip()
@@ -88,11 +142,36 @@ def _candidatos_por_slug(db, slug: str) -> list[dict]:
     return resultado
 
 
+def _candidatos_locales_por_slug(slug: str) -> list[dict]:
+    global EJERCICIOS
+    if not slug:
+        return []
+    catalogo_local = EJERCICIOS or {}
+    if not catalogo_local:
+        catalogo_local = _refrescar_catalogo()
+        if isinstance(catalogo_local, dict):
+            EJERCICIOS.update(catalogo_local)
+    coincidencias: list[dict] = []
+    for nombre, data in catalogo_local.items():
+        if _buscable_id(nombre) != slug:
+            continue
+        entrada = dict(data or {})
+        if "_doc_id" not in entrada:
+            doc_id = entrada.get("doc_id") or entrada.get("id") or ""
+            if not doc_id:
+                doc_id = slug
+            entrada["_doc_id"] = doc_id
+        coincidencias.append(entrada)
+    return coincidencias
+
+
 def _video_catalogo_para_nombre(db, nombre: str, correo_entrenador: str) -> tuple[str, str]:
     slug = _buscable_id(nombre)
     if not slug:
         return "", ""
     candidatos = _candidatos_por_slug(db, slug)
+    if not candidatos:
+        candidatos = _candidatos_locales_por_slug(slug)
     if not candidatos:
         return "", ""
     correo_norm = (correo_entrenador or "").strip().lower()
@@ -321,7 +400,7 @@ def _refrescar_catalogo() -> dict[str, dict]:
     return obtener_ejercicios_disponibles()
 
 
-EJERCICIOS = _refrescar_catalogo()
+EJERCICIOS: dict[str, dict] = {}
 USUARIOS = cargar_usuarios()
 IMPLEMENTOS = cargar_implementos()
 
@@ -466,7 +545,6 @@ COLUMNAS_TABLA = [
     "RepsMax",
     "Peso",
     "Tiempo",
-    "Velocidad",
     "Descanso",
     "RIR",
     "RirMin",
@@ -507,14 +585,15 @@ BASE_HEADERS = [
     "Peso",
     "RIR (Min/Max)",
     "Progresión",
+    "Set Mode",
     "Copiar",
     "Borrar",
     "Video",
 ]
 
-BASE_SIZES = [0.9, 2.4, 2.8, 2.0, 0.8, 1.4, 1.0, 1.3, 1.0, 0.6, 0.6, 0.9]
+BASE_SIZES = [0.9, 2.4, 2.8, 2.0, 0.8, 1.4, 1.0, 1.3, 1.0, 1.0, 0.6, 0.6, 0.9]
 
-PROGRESION_VAR_OPTIONS = ["", "peso", "velocidad", "tiempo", "descanso", "rir", "series", "repeticiones"]
+PROGRESION_VAR_OPTIONS = ["", "peso", "tiempo", "descanso", "rir", "series", "repeticiones"]
 PROGRESION_OP_OPTIONS = ["", "multiplicacion", "division", "suma", "resta"]
 COND_VAR_OPTIONS = ["", "rir"]
 COND_OP_OPTIONS = ["", ">", "<", ">=", "<="]
@@ -566,7 +645,6 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
     fila["Series"] = ej.get("Series") or ej.get("series") or ""
     fila["Peso"] = ej.get("Peso") or ej.get("peso") or ""
     fila["Tiempo"] = ej.get("Tiempo") or ej.get("tiempo") or ""
-    fila["Velocidad"] = ej.get("Velocidad") or ej.get("velocidad") or ""
     fila["RirMin"] = ej.get("RirMin") or ej.get("rir_min") or ""
     fila["RirMax"] = ej.get("RirMax") or ej.get("rir_max") or ""
     fila["RIR"] = ej.get("RIR") or ej.get("rir") or ""
@@ -577,6 +655,8 @@ def _ejercicio_firestore_a_fila_ui(ej: dict) -> dict:
     fila["Video"] = video_norm or video_raw or ""
     fila["RirMin"] = fila["RirMin"] or fila["RIR"]
     fila["RirMax"] = fila["RirMax"] or fila["RIR"]
+    top_sets_raw = ej.get("TopSetData") or ej.get("top_sets") or ej.get("TopSets")
+    fila["TopSetData"] = _normalizar_topset_data(top_sets_raw)
 
     reps = ej.get("repeticiones")
     if "RepsMin" in ej or "RepsMax" in ej:
@@ -627,7 +707,6 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
         "reps_max": reps_max,
         "peso": _f(fila.get("Peso")),
         "tiempo": fila.get("Tiempo", ""),
-        "velocidad": fila.get("Velocidad", ""),
         "descanso": fila.get("Descanso", ""),
         "rir_min": rir_min if rir_min is not None else _f(rir_txt),
         "rir_max": rir_max if rir_max is not None else _f(rir_txt),
@@ -643,6 +722,10 @@ def _fila_ui_a_ejercicio_firestore_legacy(fila: dict) -> dict:
         resultado[f"CondicionVar_{p}"] = fila.get(f"CondicionVar_{p}", "")
         resultado[f"CondicionOp_{p}"] = fila.get(f"CondicionOp_{p}", "")
         resultado[f"CondicionValor_{p}"] = fila.get(f"CondicionValor_{p}", "")
+    top_sets = fila.get("TopSetData")
+    normalizados = _normalizar_topset_data(top_sets)
+    if normalizados:
+        resultado["TopSetData"] = normalizados
     return resultado
 
 
@@ -714,7 +797,7 @@ def _buscar_videos_inconsistentes(db, doc_data: dict) -> list[dict]:
     rutina_actual = doc_data.get("rutina", {}) or {}
     if not isinstance(rutina_actual, dict):
         return []
-    correo_entrenador = (doc_data.get("entrenador") or "").strip().lower()
+    correo_entrenador = correo_actual() or (doc_data.get("entrenador") or "").strip().lower()
     pendientes: list[dict] = []
     for dia, ejercicios in rutina_actual.items():
         for ejercicio in _iterar_ejercicios_en_obj(ejercicios):
@@ -790,6 +873,43 @@ def _reemplazar_videos_inconsistentes(
         st.error(f"No se pudo actualizar los videos en la rutina: {exc}")
         return 0
     return total
+
+
+def _reset_video_diff_selection() -> None:
+    for key in list(st.session_state.keys()):
+        if key.startswith("_video_diff_chk_"):
+            st.session_state.pop(key, None)
+        elif key.startswith("_video_diff_show_"):
+            st.session_state.pop(key, None)
+
+
+def _sync_video_diff_checkbox_state(total: int) -> None:
+    for key in list(st.session_state.keys()):
+        if not key.startswith("_video_diff_chk_"):
+            continue
+        try:
+            idx = int(key.rsplit("_", 1)[-1])
+        except ValueError:
+            continue
+        if idx >= total:
+            st.session_state.pop(key, None)
+
+
+def _render_video_preview_button(url: str, label: str, key_suffix: str) -> None:
+    url = (url or "").strip()
+    if not url:
+        st.caption(f"{label}: sin video")
+        return
+    video_norm = _normalizar_video_url(url)
+    if not video_norm:
+        st.markdown(f"{label}: [Ver enlace]({url})")
+        return
+    btn_key = f"_video_diff_btn_{key_suffix}"
+    show_key = f"_video_diff_show_{key_suffix}"
+    if st.button(f"{label} ▶️", key=btn_key):
+        st.session_state[show_key] = not st.session_state.get(show_key, False)
+    if st.session_state.get(show_key):
+        st.video(video_norm)
 
 
 def _limpiar_estado_rutina():
@@ -947,6 +1067,7 @@ def _guardar_cambios_en_documentos(
     dias_originales: list[str],
     rutina_actualizada: dict[str, list[dict]],
     cardio_actualizado: dict[str, dict],
+    objetivo_actualizado: str | None = None,
 ):
     total = 0
     for doc_id in doc_ids:
@@ -974,6 +1095,8 @@ def _guardar_cambios_en_documentos(
             payload["cardio"] = nuevo_cardio
         elif cardio_actual:
             payload["cardio"] = {}
+        if objetivo_actualizado is not None:
+            payload["objetivo"] = objetivo_actualizado
         try:
             ref.update(payload)
             total += 1
@@ -1061,7 +1184,6 @@ def _limpiar_fila_ui(key_seccion: str, fila_idx: int, seccion_actual: str, key_e
         "rmax",
         "peso",
         "tiempo",
-        "vel",
         "desc",
         "rirmin",
         "rirmax",
@@ -1071,14 +1193,24 @@ def _limpiar_fila_ui(key_seccion: str, fila_idx: int, seccion_actual: str, key_e
 
     for p in (1, 2, 3):
         st.session_state.pop(f"var{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"var{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"ope{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"ope{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"cant{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"cant{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"sem{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"sem{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"condvar{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condvar{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"condop{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condop{p}_{key_entrenamiento}_{fila_idx}", None)
         st.session_state.pop(f"condval{p}_{key_entrenamiento}", None)
+        st.session_state.pop(f"condval{p}_{key_entrenamiento}_{fila_idx}", None)
 
     st.session_state.pop(f"prog_check_{key_entrenamiento}", None)
+    st.session_state.pop(f"prog_check_{key_entrenamiento}_{fila_idx}", None)
+    st.session_state.pop(f"topset_check_{key_entrenamiento}", None)
+    st.session_state.pop(f"topset_check_{key_entrenamiento}_{fila_idx}", None)
     st.session_state.pop(f"copy_check_{key_entrenamiento}", None)
     st.session_state.pop(f"delete_{key_entrenamiento}", None)
 
@@ -1121,15 +1253,16 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
 
     ejercicios_dict = EJERCICIOS
 
-    toggle_cols = st.columns([6.8, 1.1, 1.2, 1.2, 1.7], gap="small")
+    toggle_cols = st.columns([6.5, 1.1, 1.1, 1.1, 1.1, 1.7], gap="small")
     toggle_cols[0].markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
 
     show_tiempo = toggle_cols[1].toggle("Tiempo", key=f"show_tiempo_{key_seccion}")
-    show_velocidad = toggle_cols[2].toggle("Velocidad", key=f"show_vel_{key_seccion}")
-    show_descanso = toggle_cols[3].toggle("Descanso", key=f"show_desc_{key_seccion}")
+    show_progresion = toggle_cols[2].toggle("Progresión", key=f"show_prog_{key_seccion}")
+    show_top_set_sec = toggle_cols[3].toggle("Set Mode", key=f"show_topset_{key_seccion}")
+    show_descanso = toggle_cols[4].toggle("Descanso", key=f"show_desc_{key_seccion}")
 
     if _tiene_permiso_agregar():
-        pop = toggle_cols[4].popover("＋", use_container_width=True)
+        pop = toggle_cols[5].popover("＋", use_container_width=True)
         with pop:
             st.markdown("**📌 Crear o Editar Ejercicio (rápido)**")
             try:
@@ -1282,7 +1415,7 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                             except Exception as exc:
                                 st.error(f"❌ Error al guardar: {exc}")
     else:
-        toggle_cols[4].button("＋", use_container_width=True, disabled=True)
+        toggle_cols[5].button("＋", use_container_width=True, disabled=True)
 
     ctrl_cols = st.columns([1.3, 1.3, 1.6, 5.6], gap="small")
     add_n = ctrl_cols[2].number_input("N", min_value=1, max_value=10, value=1, key=f"addn_{key_seccion}", label_visibility="collapsed")
@@ -1301,21 +1434,34 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
         headers.insert(rir_idx, "Tiempo")
         sizes.insert(rir_idx, 0.9)
         rir_idx += 1
-    if show_velocidad:
-        headers.insert(rir_idx, "Velocidad")
-        sizes.insert(rir_idx, 1.0)
-        rir_idx += 1
     if show_descanso:
         headers.insert(rir_idx, "Descanso")
         sizes.insert(rir_idx, 0.9)
+    if not show_top_set_sec:
+        try:
+            set_idx = headers.index("Set Mode")
+        except ValueError:
+            set_idx = -1
+        if set_idx >= 0:
+            headers.pop(set_idx)
+            sizes.pop(set_idx)
+    if not show_progresion:
+        prog_idx = headers.index("Progresión")
+        headers.pop(prog_idx)
+        sizes.pop(prog_idx)
 
     def _buscar_fuzzy(palabra: str) -> list[str]:
         if not palabra.strip():
             return []
-        tokens = normalizar_texto(palabra).split()
+        patron = normalizar_texto(palabra)
+        if not patron:
+            return []
         candidatos = []
-        for nombre in ejercicios_dict.keys():
-            if all(token in normalizar_texto(nombre) for token in tokens):
+        for nombre, data in ejercicios_dict.items():
+            nombre_norm = normalizar_texto(nombre)
+            slug_norm = normalizar_texto((data or {}).get("buscable_id") or _buscable_id(nombre))
+            extra_texto = f"{nombre_norm} {slug_norm}".strip()
+            if patron in extra_texto:
                 candidatos.append(nombre)
         return candidatos
 
@@ -1481,17 +1627,6 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             else:
                 fila.setdefault("Tiempo", "")
 
-            if "Velocidad" in pos:
-                fila["Velocidad"] = cols[pos["Velocidad"]].text_input(
-                    "",
-                    value=str(fila.get("Velocidad", "")),
-                    key=f"vel_{key_entrenamiento}",
-                    label_visibility="collapsed",
-                    placeholder="m/s",
-                )
-            else:
-                fila.setdefault("Velocidad", "")
-
             if "Descanso" in pos:
                 opciones_descanso = ["", "1", "2", "3", "4", "5"]
                 valor_desc = str(fila.get("Descanso", "")).split(" ")[0]
@@ -1525,8 +1660,89 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
             rmin_txt, rmax_txt = str(fila.get("RirMin", "")).strip(), str(fila.get("RirMax", "")).strip()
             fila["RIR"] = f"{rmin_txt}-{rmax_txt}" if (rmin_txt and rmax_txt) else (rmin_txt or rmax_txt or "")
 
-            prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
-            mostrar_progresion = prog_cols[1].checkbox("", key=f"prog_check_{key_entrenamiento}")
+            mostrar_top_set = False
+            top_set_state_key = f"topset_check_{key_entrenamiento}_{idx}"
+            if show_top_set_sec and "Set Mode" in pos:
+                top_cols = cols[pos["Set Mode"]].columns([1, 1, 1])
+                mostrar_top_set = top_cols[1].checkbox(
+                    "",
+                    key=top_set_state_key,
+                    label_visibility="collapsed",
+                )
+            else:
+                st.session_state.pop(top_set_state_key, None)
+
+            if mostrar_top_set:
+                st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
+                num_sets = _parse_series_count(fila.get("Series"))
+                if num_sets <= 0:
+                    st.info("Define un número de series para generar los Set Mode.")
+                    fila.pop("TopSetData", None)
+                else:
+                    datos_top = fila.get("TopSetData")
+                    if not isinstance(datos_top, list):
+                        datos_top = []
+                    datos_top = _ensure_topset_len(datos_top, num_sets)
+                    for set_idx in range(num_sets):
+                        set_key = f"topset_{key_entrenamiento}_{idx}_{set_idx}"
+                        fila_cols_top = st.columns(sizes)
+                        datos_top[set_idx]["Series"] = fila_cols_top[pos["Series"]].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("Series", "")),
+                            key=f"{set_key}_series",
+                            label_visibility="collapsed",
+                            placeholder=f"Serie {set_idx + 1}",
+                        )
+                        rep_cols_top = fila_cols_top[pos["Repeticiones"]].columns(2)
+                        datos_top[set_idx]["RepsMin"] = rep_cols_top[0].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("RepsMin", "")),
+                            key=f"{set_key}_rmin",
+                            label_visibility="collapsed",
+                            placeholder="Min",
+                        )
+                        datos_top[set_idx]["RepsMax"] = rep_cols_top[1].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("RepsMax", "")),
+                            key=f"{set_key}_rmax",
+                            label_visibility="collapsed",
+                            placeholder="Max",
+                        )
+                        datos_top[set_idx]["Peso"] = fila_cols_top[pos["Peso"]].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("Peso", "")),
+                            key=f"{set_key}_peso",
+                            label_visibility="collapsed",
+                            placeholder="Kg",
+                        )
+                        rir_cols_top = fila_cols_top[pos["RIR (Min/Max)"]].columns(2)
+                        datos_top[set_idx]["RirMin"] = rir_cols_top[0].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("RirMin", "")),
+                            key=f"{set_key}_rirmin",
+                            label_visibility="collapsed",
+                            placeholder="Min",
+                        )
+                        datos_top[set_idx]["RirMax"] = rir_cols_top[1].text_input(
+                            "",
+                            value=str(datos_top[set_idx].get("RirMax", "")),
+                            key=f"{set_key}_rirmax",
+                            label_visibility="collapsed",
+                            placeholder="Max",
+                        )
+                    fila["TopSetData"] = datos_top
+            else:
+                if show_top_set_sec:
+                    fila.pop("TopSetData", None)
+
+            mostrar_progresion = False
+            if show_progresion and "Progresión" in pos:
+                prog_cols = cols[pos["Progresión"]].columns([1, 1, 1])
+                mostrar_progresion = prog_cols[1].checkbox(
+                    "",
+                    key=f"prog_check_{key_entrenamiento}_{idx}",
+                    label_visibility="collapsed",
+                )
 
             copy_cols = cols[pos["Copiar"]].columns([1, 1, 1])
             mostrar_copia = copy_cols[1].checkbox("", key=f"copy_check_{key_entrenamiento}")
@@ -1535,13 +1751,13 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
                 st.markdown(SECTION_BREAK_HTML, unsafe_allow_html=True)
                 p = int(progresion_activa.split()[-1])
                 pcols = st.columns([0.9, 0.9, 0.7, 0.8, 0.9, 0.9, 1.0])
-                var_key = f"var{p}_{key_entrenamiento}"
-                ope_key = f"ope{p}_{key_entrenamiento}"
-                cant_key = f"cant{p}_{key_entrenamiento}"
-                sem_key = f"sem{p}_{key_entrenamiento}"
-                cond_var_key = f"condvar{p}_{key_entrenamiento}"
-                cond_op_key = f"condop{p}_{key_entrenamiento}"
-                cond_val_key = f"condval{p}_{key_entrenamiento}"
+                var_key = f"var{p}_{key_entrenamiento}_{idx}"
+                ope_key = f"ope{p}_{key_entrenamiento}_{idx}"
+                cant_key = f"cant{p}_{key_entrenamiento}_{idx}"
+                sem_key = f"sem{p}_{key_entrenamiento}_{idx}"
+                cond_var_key = f"condvar{p}_{key_entrenamiento}_{idx}"
+                cond_op_key = f"condop{p}_{key_entrenamiento}_{idx}"
+                cond_val_key = f"condval{p}_{key_entrenamiento}_{idx}"
 
                 fila[f"Variable_{p}"] = pcols[0].selectbox(
                     "Variable",
@@ -1790,6 +2006,9 @@ def editar_rutinas():
     rol_login = (st.session_state.get("rol") or "").strip().lower()
     empresa_login = empresa_de_usuario(correo_login, usuarios_map) if correo_login else EMPRESA_DESCONOCIDA
 
+    global EJERCICIOS
+    EJERCICIOS = _refrescar_catalogo()
+
     clientes_por_nombre: dict[str, list[str]] = {}
     for doc in db.collection("rutinas_semanales").stream():
         data = doc.to_dict() or {}
@@ -1905,6 +2124,7 @@ def editar_rutinas():
     with st.expander("🔁 Verificar videos distintos al catálogo"):
         if st.button("Buscar videos distintos", key="btn_buscar_videos_diff"):
             inconsistentes = _buscar_videos_inconsistentes(db, doc_data)
+            _reset_video_diff_selection()
             st.session_state["_videos_diff_lista"] = inconsistentes
             st.session_state["_videos_diff_checked"] = True
 
@@ -1913,6 +2133,7 @@ def editar_rutinas():
 
         if revisado_diff:
             if inconsistentes:
+                _sync_video_diff_checkbox_state(len(inconsistentes))
                 df_diff = pd.DataFrame(
                     [
                         {
@@ -1926,12 +2147,32 @@ def editar_rutinas():
                     ]
                 )
                 st.dataframe(df_diff, use_container_width=True, hide_index=True)
+                st.caption("Selecciona los ejercicios a corregir y previsualiza los videos si lo necesitas:")
+                seleccionados: list[dict] = []
+                for idx, item in enumerate(inconsistentes):
+                    cols_diff = st.columns([3, 1, 1])
+                    key_chk = f"_video_diff_chk_{idx}"
+                    etiqueta = f"Día {item['dia']} · {item['ejercicio']}"
+                    with cols_diff[0]:
+                        if key_chk not in st.session_state:
+                            st.session_state[key_chk] = True
+                        marcado = st.checkbox(etiqueta, key=key_chk)
+                        if marcado:
+                            seleccionados.append(item)
+                    with cols_diff[1]:
+                        _render_video_preview_button(item.get("video_actual", ""), "Video rutina", f"actual_{idx}")
+                    with cols_diff[2]:
+                        _render_video_preview_button(item.get("video_catalogo", ""), "Video catálogo", f"catalogo_{idx}")
                 if st.button("Reemplazar por video del catálogo", type="primary", key="btn_aplicar_videos_diff"):
-                    aplicados = _reemplazar_videos_inconsistentes(db, doc_id_semana, doc_data, inconsistentes)
+                    if not seleccionados:
+                        st.info("Selecciona al menos un ejercicio para corregir.")
+                    else:
+                        aplicados = _reemplazar_videos_inconsistentes(db, doc_id_semana, doc_data, seleccionados)
                     if aplicados:
                         st.success(f"Se actualizaron {aplicados} ejercicio(s) con el video del catálogo.")
                         st.session_state.pop("_videos_diff_lista", None)
                         st.session_state.pop("_videos_diff_checked", None)
+                        _reset_video_diff_selection()
                         st.session_state["_editar_rutina_actual"] = None
                         datos_cache[doc_id_semana] = (
                             db.collection("rutinas_semanales").document(doc_id_semana).get().to_dict() or {}
@@ -1952,6 +2193,15 @@ def editar_rutinas():
         st.session_state["_editar_rutina_actual"] = clave_actual
 
     st.caption(f"Semana seleccionada: **{semana_sel}** · Cliente: **{nombre_cliente}**")
+
+    objetivo_widget_key = f"editar_objetivo_{doc_id_semana}"
+    objetivo_input = st.text_area(
+        "🎯 Objetivo de la rutina (se muestra en la vista de rutinas)",
+        value=str(doc_data.get("objetivo") or ""),
+        key=objetivo_widget_key,
+        placeholder="Describe en pocas líneas el foco principal de este bloque (opcional).",
+        help="Este texto aparecerá bajo el nombre del cliente cuando se consulte la rutina.",
+    )
 
     if st.button("➕ Agregar día", type="secondary"):
         _agregar_dia()
@@ -2030,7 +2280,15 @@ def editar_rutinas():
                 continue
             doc_ids_destino.append(doc_id)
 
-        total = _guardar_cambios_en_documentos(db, doc_ids_destino, dias_actualizados, rutina_nueva, cardio_nuevo)
+        objetivo_para_guardar = objetivo_input.strip()
+        total = _guardar_cambios_en_documentos(
+            db,
+            doc_ids_destino,
+            dias_actualizados,
+            rutina_nueva,
+            cardio_nuevo,
+            objetivo_para_guardar,
+        )
         if total:
             for doc_id in doc_ids_destino:
                 snap = db.collection("rutinas_semanales").document(doc_id).get()

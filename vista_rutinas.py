@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
 from app_core.theme import inject_theme
+from app_core.users_service import get_users_map
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
 from app_core.video_utils import normalizar_link_youtube
 
@@ -270,6 +271,30 @@ st.markdown(
         margin: 12px auto;
         text-align: center;
         width: 100%;
+    }
+    .topset-card {
+        margin: 10px auto 0;
+        max-width: 520px;
+        background: rgba(255, 255, 255, 0.03);
+        border-radius: 14px;
+        padding: 12px 18px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        text-align: center;
+    }
+    .topset-card__title {
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--text-secondary-main);
+        margin-bottom: 6px;
+        text-align: center;
+    }
+    .topset-line {
+        font-size: 0.92rem;
+        letter-spacing: 0.02em;
+        color: var(--text-main, #f5f5f5);
+        margin: 4px 0;
+        text-align: center;
     }
     .routine-day .exercise-details {
         text-align: center;
@@ -699,6 +724,76 @@ def _render_cardio_block(cardio: dict) -> None:
     parts.append("</div>")
     st.markdown("".join(parts), unsafe_allow_html=True)
 
+
+def _extraer_top_sets(e: dict) -> list[dict]:
+    raw = e.get("TopSetData") or e.get("top_sets") or e.get("TopSets")
+    if isinstance(raw, dict):
+        iterable = raw.values()
+    elif isinstance(raw, (list, tuple)):
+        iterable = raw
+    else:
+        iterable = []
+    campos = ("Series", "RepsMin", "RepsMax", "Peso", "RirMin", "RirMax")
+    resultado: list[dict] = []
+    for item in iterable:
+        if not isinstance(item, dict):
+            continue
+        limpio = {}
+        tiene_valor = False
+        for campo in campos:
+            valor = item.get(campo)
+            if valor in (None, ""):
+                valor = item.get(campo.lower(), "")
+            texto = str(valor).strip()
+            limpio[campo] = texto
+            if texto:
+                tiene_valor = True
+        if tiene_valor:
+            resultado.append(limpio)
+    return resultado
+
+
+def _rango_a_texto(min_val, max_val) -> str:
+    mn, _ = _format_display_value(min_val)
+    mx, _ = _format_display_value(max_val)
+    if mn and mx:
+        return f"{mn}–{mx}"
+    if mn:
+        return f"{mn}+"
+    if mx:
+        return f"≤{mx}"
+    return ""
+
+
+def _render_top_sets_block(top_sets: list[dict]) -> str:
+    if not top_sets:
+        return ""
+    parts = ["<div class='topset-card'>", "<div class='topset-card__title'>Set Mode</div>"]
+    for idx, item in enumerate(top_sets, 1):
+        serie_label = item.get("Series") or f"Serie {idx}"
+        reps_min, _ = _format_display_value(item.get("RepsMin"))
+        reps_max, _ = _format_display_value(item.get("RepsMax"))
+        if reps_min and reps_max:
+            reps_txt = f"{reps_min} - {reps_max}"
+        elif reps_min:
+            reps_txt = f"{reps_min}+"
+        elif reps_max:
+            reps_txt = f"≤{reps_max}"
+        else:
+            reps_txt = "—"
+        peso_txt, peso_es_num = _format_display_value(item.get("Peso"))
+        if peso_txt and peso_es_num:
+            peso_txt = f"{peso_txt} kg"
+        elif not peso_txt:
+            peso_txt = "—"
+        line = f"{serie_label} × {reps_txt} × {peso_txt}"
+        rir_txt = _rango_a_texto(item.get("RirMin"), item.get("RirMax"))
+        if rir_txt:
+            line += f" · RIR {rir_txt}"
+        parts.append(f"<div class='topset-line'>{html.escape(line)}</div>")
+    parts.append("</div>")
+    return "".join(parts)
+
 # ==========================
 #  NORMALIZACIÓN / LISTAS
 # ==========================
@@ -781,6 +876,18 @@ def defaults_de_ejercicio(e: dict):
     peso_def = _num_or_empty(e.get("peso",""))
     rir_def  = _num_or_empty(e.get("rir",""))
     return reps_def, peso_def, rir_def
+
+def _nombre_cliente_llave(nombre: str | None) -> str:
+    """
+    Genera una clave normalizada para comparar nombres de cliente sin
+    depender de espacios extra ni mayúsculas/minúsculas.
+    """
+    if nombre is None:
+        return ""
+    texto = str(nombre).strip()
+    if not texto:
+        return ""
+    return " ".join(texto.split()).lower()
 
 # ==========================
 #  Racha por SEMANAS completas
@@ -1218,6 +1325,26 @@ def ver_rutinas():
         docs = db.collection("rutinas_semanales").stream()
         return [doc.to_dict() for doc in docs]
 
+    @st.cache_data(show_spinner=False, ttl=120, max_entries=512)
+    def cargar_rutinas_por_correo(correo_objetivo: str) -> list[dict]:
+        correo_objetivo = (correo_objetivo or "").strip().lower()
+        if not correo_objetivo:
+            return []
+        try:
+            docs = (
+                db.collection("rutinas_semanales")
+                  .where("correo", "==", correo_objetivo)
+                  .stream()
+            )
+        except Exception:
+            return []
+        resultados: list[dict] = []
+        for doc in docs:
+            if not doc.exists:
+                continue
+            resultados.append(doc.to_dict())
+        return resultados
+
     # Usuario
     correo_raw = (st.session_state.get("correo","") or "").strip().lower()
     if not correo_raw: st.error("❌ No hay correo registrado."); st.stop()
@@ -1235,9 +1362,16 @@ def ver_rutinas():
         unsafe_allow_html=True,
     )
 
-    # Cargar todas y filtrar por cliente según rol
-    rutinas_all = cargar_todas_las_rutinas()
-    if not rutinas_all: st.warning("⚠️ No se encontraron rutinas."); st.stop()
+    # Cargar rutinas según alcance del usuario para evitar escanear toda la colección
+    if es_entrenador(rol):
+        rutinas_all = cargar_todas_las_rutinas()
+    else:
+        rutinas_all = cargar_rutinas_por_correo(correo_raw)
+        if not rutinas_all and correo_norm != correo_raw:
+            rutinas_all = cargar_rutinas_por_correo(correo_norm)
+    if not rutinas_all:
+        st.warning("⚠️ No se encontraron rutinas.");
+        st.stop()
 
     qp_values = _current_query_params()
     qp_cliente = qp_values.get("cliente")
@@ -1245,26 +1379,11 @@ def ver_rutinas():
     qp_dia = qp_values.get("dia")
 
     cliente_sel = None
+    objetivo_placeholder = None
     if es_entrenador(rol):
         rol_lower = rol.strip().lower()
 
-        @st.cache_data(show_spinner=False, ttl=300, max_entries=256)
-        def _usuarios_por_correo():
-            mapping = {}
-            try:
-                for snap in db.collection("usuarios").stream():
-                    if not snap.exists:
-                        continue
-                    data = snap.to_dict() or {}
-                    correo_cli = (data.get("correo") or "").strip().lower()
-                    if correo_cli:
-                        mapping[correo_cli] = data
-                        mapping[normalizar_correo(correo_cli)] = data
-            except Exception:
-                pass
-            return mapping
-
-        usuarios_por_correo = _usuarios_por_correo()
+        usuarios_por_correo = get_users_map()
         def _cliente_es_activo(correo_cliente: str) -> bool:
             if not correo_cliente:
                 return True
@@ -1510,6 +1629,7 @@ def ver_rutinas():
                     """,
                     unsafe_allow_html=True,
                 )
+            objetivo_placeholder = st.container()
             if st.button("Cambiar deportista", key="volver_lista_clientes", type="secondary", use_container_width=True):
                 st.session_state["_mostrar_lista_clientes"] = True
                 st.session_state.pop("_cliente_sel", None)
@@ -1522,10 +1642,11 @@ def ver_rutinas():
             st.info("Selecciona un deportista y haz clic en \"Ver rutina\" para cargar su rutina.")
             st.stop()
 
+        cliente_sel_key = _nombre_cliente_llave(cliente_sel)
         correos_permitidos = clientes_empresa_info.get(cliente_sel, set())
         rutinas_cliente = [
             r for r in rutinas_all
-            if r.get("cliente") == cliente_sel
+            if _nombre_cliente_llave(r.get("cliente")) == cliente_sel_key
             and (
                 not correos_permitidos
                 or "__no_email__" in correos_permitidos
@@ -1535,6 +1656,7 @@ def ver_rutinas():
     else:
         rutinas_cliente = [r for r in rutinas_all if (r.get("correo","") or "").strip().lower()==correo_raw]
         cliente_sel = nombre
+        cliente_sel_key = _nombre_cliente_llave(cliente_sel)
 
     if not rutinas_cliente:
         st.warning("⚠️ No se encontraron rutinas para ese cliente.")
@@ -1593,13 +1715,22 @@ def ver_rutinas():
 
     # Documento de rutina (cliente + semana)
     if es_entrenador(rol):
-        rutina_doc = next((r for r in rutinas_cliente if r.get("fecha_lunes")==semana_sel and r.get("cliente")==cliente_sel), None)
+        rutina_doc = next(
+            (
+                r
+                for r in rutinas_cliente
+                if r.get("fecha_lunes") == semana_sel and _nombre_cliente_llave(r.get("cliente")) == cliente_sel_key
+            ),
+            None,
+        )
     else:
         rutina_doc = next((r for r in rutinas_cliente if r.get("fecha_lunes")==semana_sel), None)
 
     if not rutina_doc:
         st.warning("⚠️ No hay rutina para esa semana y cliente.")
         st.stop()
+
+    objetivo_texto = (rutina_doc.get("objetivo") or "").strip()
 
     # Banner motivacional (solo deportista) con racha de SEMANAS
     if rol == "deportista":
@@ -1697,6 +1828,24 @@ def ver_rutinas():
         dia_sel = str(qp_dia)
         st.session_state["dia_sel"] = dia_sel
 
+    if objetivo_placeholder:
+        objetivo_placeholder.empty()
+        if dia_sel and objetivo_texto:
+            objetivo_html = html.escape(objetivo_texto).replace("\n", "<br>")
+            objetivo_placeholder.markdown(
+                f"""
+                <div class='card' style='margin-top:10px; border:1px dashed rgba(226,94,80,0.35); background:rgba(226,94,80,0.08); padding:14px; border-radius:14px;'>
+                    <div style='font-size:0.78rem; text-transform:uppercase; letter-spacing:0.08em; font-weight:700; color:rgba(226,94,80,0.95);'>
+                        Objetivo de la rutina
+                    </div>
+                    <div style='margin-top:6px; font-size:0.95rem; color:var(--text-main); text-align:left;'>
+                        {objetivo_html}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
     _sync_rutinas_query_params(cliente_sel, semana_sel, dia_sel)
 
     if not dia_sel:
@@ -1756,17 +1905,22 @@ def ver_rutinas():
             video_url, detalle_visible = _video_y_detalle_desde_ejercicio(e)
 
             # 2) Línea secundaria: reps/peso/tiempo/descanso/velocidad/RIR
-            partes = [f"{_repstr(e)}"]
-            if peso_valor:
-                partes.append(f"{peso_valor} kg" if peso_es_num else peso_valor)
-            if tiempo_valor:
-                partes.append(f"{tiempo_valor} seg" if tiempo_es_num else tiempo_valor)
-            if velocidad_valor:
-                partes.append(f"{velocidad_valor} m/s" if velocidad_es_num else velocidad_valor)
-            dsc = _descanso_texto(e)
-            if dsc:       partes.append(f"{dsc}")
-            rir_text = _rirstr(e)
-            if rir_text:  partes.append(f"RIR {rir_text}")
+            top_sets_data = _extraer_top_sets(e)
+            tiene_top_sets = bool(top_sets_data)
+
+            partes = []
+            if not tiene_top_sets:
+                partes.append(f"{_repstr(e)}")
+                if peso_valor:
+                    partes.append(f"{peso_valor} kg" if peso_es_num else peso_valor)
+                if tiempo_valor:
+                    partes.append(f"{tiempo_valor} seg" if tiempo_es_num else tiempo_valor)
+                if velocidad_valor:
+                    partes.append(f"{velocidad_valor} m/s" if velocidad_es_num else velocidad_valor)
+                dsc = _descanso_texto(e)
+                if dsc:       partes.append(f"{dsc}")
+                rir_text = _rirstr(e)
+                if rir_text:  partes.append(f"RIR {rir_text}")
 
             # 3) Texto de detalle (centrado)
             info_str = f"""
@@ -1809,7 +1963,16 @@ def ver_rutinas():
                 )
 
             # 🔹 Línea de detalles centrada
-            st.markdown(info_str, unsafe_allow_html=True)
+            if partes:
+                st.markdown(info_str, unsafe_allow_html=True)
+            else:
+                st.markdown("<p style='margin:6px 0;'>&nbsp;</p>", unsafe_allow_html=True)
+
+            if top_sets_data:
+                st.markdown(_render_top_sets_block(top_sets_data), unsafe_allow_html=True)
+                e["_top_sets_cached"] = top_sets_data
+            else:
+                e.pop("_top_sets_cached", None)
 
             # 🔹 Comentario centrado
             comentario_cliente = (e.get("comentario", "") or "").strip()
@@ -1897,11 +2060,31 @@ def ver_rutinas():
                 except:
                     num_series = 0
 
-                reps_def, peso_def, rir_def = defaults_de_ejercicio(e)
+                top_sets_report = e.get("_top_sets_cached") or _extraer_top_sets(e)
+                num_series = max(num_series, len(top_sets_report))
+
+                reps_def_global, peso_def_global, rir_def_global = defaults_de_ejercicio(e)
+
+                def _defaults_por_idx(idx: int):
+                    reps_def = reps_def_global
+                    peso_def = peso_def_global
+                    rir_def = rir_def_global
+                    if idx < len(top_sets_report):
+                        top = top_sets_report[idx]
+                        reps_def = _num_or_empty(top.get("RepsMin")) or reps_def
+                        peso_def = _num_or_empty(top.get("Peso")) or peso_def
+                        rir_def = _num_or_empty(top.get("RirMin")) or rir_def
+                    return reps_def, peso_def, rir_def
+
                 if "series_data" not in e or not isinstance(e["series_data"], list) or len(e["series_data"]) != num_series:
-                    e["series_data"] = [{"reps": reps_def, "peso": peso_def, "rir": rir_def} for _ in range(num_series)]
+                    e["series_data"] = []
+                    for s_idx in range(num_series):
+                        reps_def, peso_def, rir_def = _defaults_por_idx(s_idx)
+                        e["series_data"].append({"reps": reps_def, "peso": peso_def, "rir": rir_def})
                 else:
-                    for s in e["series_data"]:
+                    for s_idx in range(num_series):
+                        reps_def, peso_def, rir_def = _defaults_por_idx(s_idx)
+                        s = e["series_data"][s_idx]
                         if not str(s.get("reps", "")).strip():
                             s["reps"] = reps_def
                         if not str(s.get("peso", "")).strip():
