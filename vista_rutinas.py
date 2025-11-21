@@ -1531,6 +1531,11 @@ def ver_rutinas():
 
         busqueda = st.text_input("Busca deportista", key="cliente_input", placeholder="Escribe un nombre…")
         busqueda_lower = busqueda.lower()
+        busqueda_prev = st.session_state.get("_busqueda_cliente", "")
+        if busqueda != busqueda_prev:
+            st.session_state["_busqueda_cliente"] = busqueda
+            if busqueda:
+                st.session_state["_mostrar_lista_clientes"] = True
         clientes_asignados = clientes_tarjetas
 
         if clientes_tarjetas:
@@ -1558,9 +1563,6 @@ def ver_rutinas():
 
         if st.session_state.get("_cliente_sel") not in clientes_empresa_info:
             st.session_state.pop("_cliente_sel", None)
-            st.session_state["_mostrar_lista_clientes"] = True
-
-        if busqueda:
             st.session_state["_mostrar_lista_clientes"] = True
 
         if not st.session_state.get("_cliente_sel") and qp_cliente and qp_cliente in clientes_empresa_info:
