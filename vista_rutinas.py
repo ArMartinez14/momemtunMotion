@@ -2045,11 +2045,11 @@ def ver_rutinas():
                 e["_top_sets_cached"] = top_sets_data
             else:
                 # Selector + resumen (misma zona, centrados)
-                cols_info = st.columns([1, 2, 1])
+                cols_info = st.columns([1, 2.4, 1])
 
                 with cols_info[1]:
                     # Fila con texto de partes + checkbox + "lb"
-                    col_text, col_cb, col_lb = st.columns([0.88, 0.06])
+                    col_text, col_cb, col_lb = st.columns([0.88, 0.06, 0.06])
 
                     # 1) Checkbox real (funciona perfecto)
                     with col_cb:
