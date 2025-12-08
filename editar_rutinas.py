@@ -1364,7 +1364,12 @@ def render_tabla_dia(i: int, seccion: str, progresion_activa: str, dias_labels: 
 
     ejercicios_dict = EJERCICIOS
 
-    toggle_cols = st.columns([6.5, 1.1, 1.1, 1.1, 1.1, 1.7], gap="small")
+    # Mantén los toggles en una sola línea y evita cortes de texto
+    st.markdown(
+        "<style>div[data-testid='stToggle'] label { white-space: nowrap; }</style>",
+        unsafe_allow_html=True,
+    )
+    toggle_cols = st.columns([6.0, 1.4, 1.5, 1.5, 1.5, 1.8], gap="medium")
     toggle_cols[0].markdown(f"<h4 class='h-accent' style='margin-top:2px'>{seccion}</h4>", unsafe_allow_html=True)
 
     show_tiempo = toggle_cols[1].toggle("Tiempo", key=f"show_tiempo_{key_seccion}")
