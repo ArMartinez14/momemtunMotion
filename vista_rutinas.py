@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import streamlit as st
-from firebase_admin import firestore, storage
+from firebase_admin import firestore
 from datetime import datetime, timedelta, date
-import json, random, re, math, html, os
+import json, random, re, math, html
 from io import BytesIO
 import matplotlib.pyplot as plt
 import time
 from app_core.firebase_client import get_db
-from app_core.storage_client import upload_bytes_get_url
 from app_core.theme import inject_theme
 from app_core.users_service import get_users_map
 from app_core.utils import empresa_de_usuario, EMPRESA_MOTION, EMPRESA_ASESORIA, EMPRESA_DESCONOCIDA
@@ -245,16 +244,6 @@ st.markdown(
         align-items: center;
         justify-content: center;
         gap: 8px;
-    }
-    /* Evita cortes de texto en toggles y centra contenido */
-    div[data-testid="stToggle"] {
-        align-items: center;
-    }
-    div[data-testid="stToggle"] label {
-        white-space: nowrap;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
     }
     .routine-day {
         text-align: center;
@@ -775,27 +764,6 @@ def _extraer_top_sets(e: dict) -> list[dict]:
         if tiene_valor:
             resultado.append(limpio)
     return resultado
-
-
-def _tiene_peso_definido(e: dict, top_sets: list[dict] | None = None) -> bool:
-    """Indica si el ejercicio tiene algún peso configurado (incluye top sets)."""
-    def _hay_valor(v) -> bool:
-        if isinstance(v, (int, float)):
-            return True  # Considera 0 como valor válido
-        if isinstance(v, str):
-            return v.strip() != ""
-        return bool(v)
-
-    if _hay_valor(e.get("peso")) or _hay_valor(e.get("Peso")):
-        return True
-    if not top_sets:
-        return False
-    for item in top_sets:
-        if not isinstance(item, dict):
-            continue
-        if _hay_valor(item.get("Peso")) or _hay_valor(item.get("peso")):
-            return True
-    return False
 
 
 def _rango_a_texto(min_val, max_val) -> str:
@@ -2032,50 +2000,41 @@ def ver_rutinas():
                 # Columna central para el título
                 cols_title = st.columns([1, 1.6, 1])
                 with cols_title[1]:
-                    if mostrar_toggle_peso:
-                        # Fila: "Set Mode" | checkbox "lb"
-                        col_label, col_check = st.columns([0.55, 0.45])
 
-                        with col_label:
-                            st.markdown(
-                                "<div class='topset-card__title' "
-                                "style='margin-bottom:0; text-align:right;'>"
-                                "Set Mode"
-                                "</div>",
-                                unsafe_allow_html=True,
-                            )
+                    # Fila: "Set Mode" | checkbox "lb"
+                    col_label, col_check = st.columns([0.55, 0.45])
 
-                        with col_check:
-                            # ÚNICO checkbox (el que realmente usas en el código)
-                            usa_libras = st.checkbox(
-                                "lb",
-                                value=usa_libras_default,
-                                key=toggle_key,
-                                help="Ver peso en libras para este ejercicio",
-                                label_visibility="visible",
-                            )
-
-                        # Ajuste de margen para que no baje el checkbox
-                        st.markdown(
-                            """
-                            <style>
-                            /* Quitar espacio extra arriba del checkbox dentro de esta zona */
-                            div[data-testid="stCheckbox"] {
-                                margin-top: 0px;
-                            }
-                            </style>
-                            """,
-                            unsafe_allow_html=True,
-                        )
-                    else:
-                        usa_libras = usa_libras_default
+                    with col_label:
                         st.markdown(
                             "<div class='topset-card__title' "
-                            "style='margin-bottom:0; text-align:center;'>"
+                            "style='margin-bottom:0; text-align:right;'>"
                             "Set Mode"
                             "</div>",
                             unsafe_allow_html=True,
                         )
+
+                    with col_check:
+                        # ÚNICO checkbox (el que realmente usas en el código)
+                        usa_libras = st.checkbox(
+                            "lb",
+                            value=usa_libras_default,
+                            key=toggle_key,
+                            help="Ver peso en libras para este ejercicio",
+                            label_visibility="visible",
+                        )
+
+                    # Ajuste de margen para que no baje el checkbox
+                    st.markdown(
+                        """
+                        <style>
+                        /* Quitar espacio extra arriba del checkbox dentro de esta zona */
+                        div[data-testid="stCheckbox"] {
+                            margin-top: 0px;
+                        }
+                        </style>
+                        """,
+                        unsafe_allow_html=True,
+                    )
 
                 cols_set = st.columns([1, 2, 1])
                 with cols_set[1]:
@@ -2086,24 +2045,21 @@ def ver_rutinas():
                 e["_top_sets_cached"] = top_sets_data
             else:
                 # Selector + resumen (misma zona, centrados)
-                cols_info = st.columns([1, 2, 1])
+                cols_info = st.columns([1, 2.4, 1])
 
                 with cols_info[1]:
-                    # Texto arriba, checkbox centrado debajo
-                    info_placeholder = st.empty()
-                    if mostrar_toggle_peso:
-                        # Ligeramente desplazado a la derecha para no quedar alineado con el texto
-                        cb_cols = st.columns([1.3, 1, 0.7])
-                        with cb_cols[1]:
-                            usa_libras = st.checkbox(
-                                "lb",
-                                value=usa_libras_default,
-                                key=toggle_key,
-                                help="Ver peso en libras para este ejercicio",
-                                label_visibility="visible",
-                            )
-                    else:
-                        usa_libras = usa_libras_default
+                    # Fila con texto de partes + checkbox + "lb"
+                    col_text, col_cb, col_lb = st.columns([0.88, 0.06, 0.06])
+
+                    # 1) Checkbox real (funciona perfecto)
+                    with col_cb:
+                        usa_libras = st.checkbox(
+                            "lb",
+                            value=usa_libras_default,
+                            key=toggle_key,
+                            help="Ver peso en libras para este ejercicio",
+                            label_visibility="collapsed",  # ocultamos el label aquí
+                        )
 
                     # 2) Cálculo de partes usando usa_libras
                     peso_base_kg = _peso_to_float(e.get("peso"), unidad_origen)
@@ -2143,7 +2099,22 @@ def ver_rutinas():
                         {' · '.join(partes)}
                     </p>
                     """
-                    info_placeholder.markdown(info_str, unsafe_allow_html=True)
+                    with col_text:
+                        st.markdown(info_str, unsafe_allow_html=True)
+
+                    # 4) Label "lb" pegado visualmente al checkbox
+                    with col_lb:
+                        st.markdown(
+                            """
+                            <p style='margin-top:0;
+                                    margin-bottom:0;
+                                    font-size:0.95rem;
+                                    line-height:1.3;'>
+                                lb
+                            </p>
+                            """,
+                            unsafe_allow_html=True,
+                        )
 
                 e.pop("_top_sets_cached", None)
 
@@ -2325,44 +2296,6 @@ def ver_rutinas():
                         placeholder="RIR", key=f"rir_{ejercicio_id}_{s_idx}", label_visibility="collapsed"
                     )
                     e["series_data"][s_idx]["rir"] = _sanitizar_valor_reporte(rir_val, "rir")
-
-                # Video de reporte (subida y vista previa)
-                st.markdown("<div class='routine-caption'>Video de la serie (opcional)</div>", unsafe_allow_html=True)
-                if e.get("reporte_video_url"):
-                    st.video(e["reporte_video_url"])
-                video_uploader = st.file_uploader(
-                    "Subir video (mp4/mov)",
-                    type=["mp4", "mov", "m4v"],
-                    key=f"video_{ejercicio_id}",
-                    accept_multiple_files=False,
-                    label_visibility="collapsed",
-                    help="Se genera un link para el coach; límite sugerido 80 MB.",
-                )
-                if video_uploader:
-                    size_bytes = getattr(video_uploader, "size", 0) or 0
-                    size_mb = size_bytes / (1024 * 1024)
-                    if size_mb > 80:
-                        st.error("El video supera los 80 MB. Súbelo más liviano.")
-                    else:
-                        try:
-                            data = video_uploader.read()
-                            ext = (video_uploader.name or "video.mp4").split(".")[-1].lower()
-                            if ext not in {"mp4", "mov", "m4v"}:
-                                ext = "mp4"
-                            path = f"reportes_videos/{normalizar_correo(rutina_doc.get('correo',''))}/{semana_sel}/{dia_sel}/{ejercicio_id}.{ext}"
-                            url = upload_bytes_get_url(
-                                data,
-                                path,
-                                content_type=video_uploader.type or "video/mp4",
-                                signed_ttl_days=30,
-                            )
-                            e["reporte_video_url"] = url
-                            e["reporte_video_path"] = path
-                            e["reporte_video_subido_en"] = datetime.utcnow().isoformat()
-                            st.success("Video subido y asociado al ejercicio.")
-                        except Exception as ex:
-                            st.error("No se pudo subir el video. Intenta nuevamente.")
-                            st.exception(ex)
 
                 # Comentario general
                 st.markdown("<div class='routine-caption'>Comentario general</div>", unsafe_allow_html=True)
